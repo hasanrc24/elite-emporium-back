@@ -9,6 +9,7 @@ import { encryptSecret } from '../../lib/encryption.js';
 import { AppError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { moneyString } from '../../lib/money.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { pagination, pageEnvelope } from '../../lib/pagination.js';
 import { env } from '../../config/env.js';
 import { signPrivateMedia } from '../media/media.storage.js';
@@ -17,8 +18,7 @@ import { recordAudit } from '../audits/audit.service.js';
 import { addDomainEvent } from '../events/outbox.service.js';
 
 function dateRange(query, field = 'createdAt') {
-  if (!query.from && !query.to) return {};
-  return { [field]: { ...(query.from ? { [Op.gte]: new Date(String(query.from)) } : {}), ...(query.to ? { [Op.lt]: new Date(String(query.to)) } : {}) } };
+  return dateRangeWhere(query, field);
 }
 
 export async function listAudits(query) {
@@ -148,7 +148,7 @@ export async function reportData(report, query) {
 
 export async function listExports(query, requesterId) {
   const { page, pageSize, limit, offset } = pagination(query);
-  const where = query.mine === 'true' ? { requestedBy: requesterId } : {};
+  const where = /** @type {any} */ ({ ...(query.mine === 'true' ? { requestedBy: requesterId } : {}), ...dateRange(query) });
   if (query.status) where.status = query.status;
   if (query.report) where.report = query.report;
   const result = await ExportJob.findAndCountAll({ where, include: [{ model: User, as: 'requester', attributes: ['id', 'name'] }], limit, offset, order: [['createdAt', 'DESC']] });
@@ -257,7 +257,7 @@ export async function testWebhook(id, actorId, request) {
 
 export async function listContactMessages(query) {
   const { page, pageSize, limit, offset } = pagination(query);
-  const where = {};
+  const where = { ...dateRange(query) };
   if (query.status) where.status = query.status;
   const result = await ContactMessage.findAndCountAll({ where, limit, offset, order: [['createdAt', 'DESC']] });
   return pageEnvelope(result, page, pageSize);

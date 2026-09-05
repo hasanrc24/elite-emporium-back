@@ -25,6 +25,7 @@ import { env } from '../../config/env.js';
 import { AppError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { pagination, pageEnvelope } from '../../lib/pagination.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { recordAudit } from '../audits/audit.service.js';
 import { hashPassword } from '../auth/auth.service.js';
 import { addDomainEvent, queueNotification } from '../events/outbox.service.js';
@@ -105,7 +106,7 @@ export async function listAdminPrivacyRequests(query) {
   const where = {};
   if (query.status) where.status = query.status;
   if (query.type) where.type = query.type;
-  if (query.from || query.to) where.createdAt = { ...(query.from ? { [Op.gte]: new Date(query.from) } : {}), ...(query.to ? { [Op.lt]: new Date(query.to) } : {}) };
+  Object.assign(where, dateRangeWhere(query));
   const customerWhere = query.search ? { [Op.or]: [
     { name: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } },
     { phone: { [Op.like]: `%${String(query.search).slice(0, 30)}%` } },

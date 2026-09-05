@@ -7,6 +7,7 @@ import { newId } from '../../lib/ids.js';
 import { sha256 } from '../../lib/crypto.js';
 import { normalizeEmail, normalizePhone } from '../../lib/normalization.js';
 import { pagination, pageEnvelope } from '../../lib/pagination.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { recordAudit } from '../audits/audit.service.js';
 import { addDomainEvent, queueNotification } from '../events/outbox.service.js';
 
@@ -81,7 +82,7 @@ export async function submitContact(payload, request) {
 }
 
 function contentModels(kind) { return kind === 'page' ? { Model: Page, Translation: PageTranslation, foreignKey: 'pageId' } : { Model: Post, Translation: PostTranslation, foreignKey: 'postId' }; }
-export async function listAdminContent(kind, query) { const { Model, Translation } = contentModels(kind); const { page, pageSize, limit, offset } = pagination(query); const where = query.status ? { status: query.status } : {}; if (query.search) where.slug = { [Op.like]: `%${String(query.search).slice(0, 100)}%` }; const result = await Model.findAndCountAll({ where, paranoid: false, include: [translatedInclude(Translation)], distinct: true, limit, offset, order: [['updatedAt', 'DESC']] }); return { data: result.rows.map(adminContent), meta: pageEnvelope(result, page, pageSize).meta }; }
+export async function listAdminContent(kind, query) { const { Model, Translation } = contentModels(kind); const { page, pageSize, limit, offset } = pagination(query); const where = /** @type {any} */ ({ ...(query.status ? { status: query.status } : {}), ...dateRangeWhere(query) }); if (query.search) where.slug = { [Op.like]: `%${String(query.search).slice(0, 100)}%` }; const result = await Model.findAndCountAll({ where, paranoid: false, include: [translatedInclude(Translation)], distinct: true, limit, offset, order: [['updatedAt', 'DESC']] }); return { data: result.rows.map(adminContent), meta: pageEnvelope(result, page, pageSize).meta }; }
 export async function getAdminContent(kind, id) { const { Model, Translation } = contentModels(kind); const row = await Model.findByPk(id, { paranoid: false, include: [translatedInclude(Translation)] }); if (!row) throw AppError.notFound(`${kind} not found.`); return adminContent(row); }
 
 async function writeRevision(kind, row, actorId, summary, transaction) { const current = await getAdminContentTransactional(kind, row.id, transaction); await ContentRevision.create({ id: newId(), entityType: kind, entityId: row.id, version: Number(row.version), payload: current, actorId, changeSummary: summary || null, publishedAt: row.status === 'published' ? new Date() : null }, { transaction }); }

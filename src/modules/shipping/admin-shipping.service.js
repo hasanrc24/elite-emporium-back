@@ -4,6 +4,7 @@ import { sequelize } from '../../db/sequelize.js';
 import { AppError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { moneyString } from '../../lib/money.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { recordAudit } from '../audits/audit.service.js';
 
 function safeTrackingUrl(input) {
@@ -90,6 +91,7 @@ function shipmentDto(row) {
 export async function listShipments(query) {
   const where = {};
   if (query.status) where.status = query.status;
+  Object.assign(where, dateRangeWhere(query));
   const rows = await Shipment.findAll({ where, include: [{ model: Order, as: 'order', where: query.search ? { reference: { [Op.like]: `%${String(query.search).slice(0, 80)}%` } } : undefined }, { model: ShipmentEvent, as: 'events' }], order: [['createdAt', 'DESC']], limit: Math.min(200, Math.max(1, Number(query.limit) || 50)) });
   return rows.map(shipmentDto);
 }

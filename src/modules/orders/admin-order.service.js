@@ -26,6 +26,7 @@ import { orderReference } from '../../lib/ids.js';
 import { canonicalJson } from '../../lib/canonical-json.js';
 import { sha256 } from '../../lib/crypto.js';
 import { money, moneyString } from '../../lib/money.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { normalizeEmail, normalizePhone } from '../../lib/normalization.js';
 import { pagination, pageEnvelope } from '../../lib/pagination.js';
 import { recordAudit } from '../audits/audit.service.js';
@@ -96,7 +97,7 @@ export async function listAdminOrders(query) {
   if (query.paymentMethod) where.paymentMethod = query.paymentMethod;
   if (query.source) where.source = query.source;
   if (query.deliveryCode) where.deliveryCode = query.deliveryCode;
-  if (query.from || query.to) where.createdAt = { ...(query.from ? { [Op.gte]: new Date(query.from) } : {}), ...(query.to ? { [Op.lt]: new Date(query.to) } : {}) };
+  Object.assign(where, dateRangeWhere(query));
   if (query.search) where[Op.or] = [{ reference: { [Op.like]: `%${String(query.search).slice(0, 80)}%` } }, { customerPhone: { [Op.like]: `%${String(query.search).slice(0, 30)}%` } }, { customerEmail: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } }, { customerName: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } }];
   const result = await Order.findAndCountAll({ where, include: [{ model: Payment, as: 'payments' }], distinct: true, limit, offset, order: [['createdAt', 'DESC']] });
   return { data: result.rows.map((order) => orderDto(order, true)), meta: pageEnvelope(result, page, pageSize).meta };
@@ -218,6 +219,7 @@ export async function listPayments(query) {
   const where = {};
   if (query.status) where.status = query.status;
   if (query.method) where.method = query.method;
+  Object.assign(where, dateRangeWhere(query));
   const result = await Payment.findAndCountAll({ where, include: [{ model: Order, as: 'order', where: query.search ? { [Op.or]: [{ reference: { [Op.like]: `%${String(query.search).slice(0, 80)}%` } }, { customerPhone: { [Op.like]: `%${String(query.search).slice(0, 30)}%` } }] } : undefined }, { model: PaymentAttempt, as: 'attempts' }], distinct: true, limit, offset, order: [['createdAt', 'DESC']] });
   return { data: result.rows.map(paymentDto), meta: pageEnvelope(result, page, pageSize).meta };
 }

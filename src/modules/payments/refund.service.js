@@ -15,6 +15,7 @@ import { sha256 } from '../../lib/crypto.js';
 import { AppError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { money, moneyString } from '../../lib/money.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { pagination, pageEnvelope } from '../../lib/pagination.js';
 import { recordAudit } from '../audits/audit.service.js';
 import { addDomainEvent, queueNotification } from '../events/outbox.service.js';
@@ -100,6 +101,7 @@ export async function listRefunds(query) {
   if (query.method) where.method = query.method;
   if (query.paymentId) where.paymentId = query.paymentId;
   if (query.returnId) where.returnId = query.returnId;
+  Object.assign(where, dateRangeWhere(query));
   const orderWhere = query.search ? {
     [Op.or]: [
       { reference: { [Op.like]: `%${String(query.search).slice(0, 80)}%` } },

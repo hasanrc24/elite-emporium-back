@@ -21,6 +21,7 @@ import { sequelize } from '../../db/sequelize.js';
 import { AppError } from '../../lib/errors.js';
 import { newId, orderReference } from '../../lib/ids.js';
 import { money, moneyString } from '../../lib/money.js';
+import { dateRangeWhere } from '../../lib/date-range.js';
 import { pagination, pageEnvelope } from '../../lib/pagination.js';
 import { recordAudit } from '../audits/audit.service.js';
 import { effectivePrice, isSaleActive } from '../catalog/pricing.js';
@@ -63,7 +64,7 @@ export async function listAdminReturns(query) {
   if (query.status) where.status = query.status;
   if (query.type) where.type = query.type;
   if (query.resolution) where.resolution = query.resolution;
-  if (query.from || query.to) where.createdAt = { ...(query.from ? { [Op.gte]: new Date(query.from) } : {}), ...(query.to ? { [Op.lt]: new Date(query.to) } : {}) };
+  Object.assign(where, dateRangeWhere(query));
   if (query.search) {
     const search = String(query.search).slice(0, 100);
     where[Op.or] = [

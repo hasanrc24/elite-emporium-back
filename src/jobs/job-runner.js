@@ -12,6 +12,7 @@ import { sequelize } from '../db/sequelize.js';
 import { decryptSecret } from '../lib/encryption.js';
 import { newId } from '../lib/ids.js';
 import { logger } from '../lib/logger.js';
+import { dateRangeWhere } from '../lib/date-range.js';
 import { persistOriginal } from '../modules/media/media.storage.js';
 
 const maxAttempts = 8;
@@ -80,7 +81,7 @@ export async function processNotifications(limit = 20) {
 
 function csvCell(value) { const text = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value); return `"${text.replaceAll('"', '""')}"`; }
 async function reportRows(report, filters) {
-  const range = filters?.from || filters?.to ? { createdAt: { ...(filters.from ? { [Op.gte]: new Date(filters.from) } : {}), ...(filters.to ? { [Op.lt]: new Date(filters.to) } : {}) } } : {};
+  const range = dateRangeWhere(filters);
   const models = { orders: Order, sales: Order, products: Product, inventory: InventoryLevel, customers: User, coupons: Coupon, payments: Payment, returns: ReturnRequest, profit: Order, audits: AuditLog };
   const Model = models[report]; if (!Model) throw Object.assign(new Error('Unsupported report.'), { code: 'UNSUPPORTED_REPORT' });
   return Model.findAll({ where: range, raw: true, limit: 100_000, order: [['createdAt', 'ASC']] });
