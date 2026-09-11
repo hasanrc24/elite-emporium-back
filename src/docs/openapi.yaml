@@ -13,243 +13,414 @@ tags:
   - { name: Account }
   - { name: Administration }
 paths:
-  /health/live: { $ref: '#/components/pathItems/PublicGet' }
-  /health/ready: { $ref: '#/components/pathItems/PublicGet' }
-  /version: { $ref: '#/components/pathItems/PublicGet' }
-  /metrics: { $ref: '#/components/pathItems/PublicGet' }
-  /openapi.json: { $ref: '#/components/pathItems/PublicGet' }
-  /auth/register: { $ref: '#/components/pathItems/PublicPost' }
-  /auth/login: { $ref: '#/components/pathItems/PublicPost' }
-  /auth/mfa/verify: { $ref: '#/components/pathItems/PublicPost' }
-  /auth/refresh: { $ref: '#/components/pathItems/PublicPost' }
-  /auth/logout: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/logout-all: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/me: { $ref: '#/components/pathItems/AuthGet' }
-  /auth/sessions: { $ref: '#/components/pathItems/AuthGet' }
+  /health/live: { $ref: "#/components/pathItems/PublicGet" }
+  /health/ready: { $ref: "#/components/pathItems/PublicGet" }
+  /version: { $ref: "#/components/pathItems/PublicGet" }
+  /metrics: { $ref: "#/components/pathItems/PublicGet" }
+  /openapi.json: { $ref: "#/components/pathItems/PublicGet" }
+  /auth/register: { $ref: "#/components/pathItems/PublicPost" }
+  /auth/login: { $ref: "#/components/pathItems/PublicPost" }
+  /auth/mfa/verify: { $ref: "#/components/pathItems/PublicPost" }
+  /auth/refresh: { $ref: "#/components/pathItems/PublicPost" }
+  /auth/logout: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/logout-all: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/me: { $ref: "#/components/pathItems/AuthGet" }
+  /auth/sessions: { $ref: "#/components/pathItems/AuthGet" }
   /auth/sessions/{id}:
-    parameters: &idParam [{ $ref: '#/components/parameters/Id' }]
-    $ref: '#/components/pathItems/AuthDelete'
-  /auth/forgot-password: { $ref: '#/components/pathItems/PublicPost' }
-  /auth/reset-password: { $ref: '#/components/pathItems/PublicPost' }
-  /auth/change-password: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/verify/resend: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/verify/phone: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/verify/email: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/mfa/setup: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/mfa/confirm: { $ref: '#/components/pathItems/AuthPost' }
-  /auth/mfa: { $ref: '#/components/pathItems/AuthDelete' }
-  /storefront/settings: { $ref: '#/components/pathItems/PublicGet' }
-  /storefront/navigation: { $ref: '#/components/pathItems/PublicGet' }
-  /storefront/home: { $ref: '#/components/pathItems/PublicGet' }
-  /products: { $ref: '#/components/pathItems/PublicGet' }
+    parameters: &idParam [{ $ref: "#/components/parameters/Id" }]
+    $ref: "#/components/pathItems/AuthDelete"
+  /auth/forgot-password: { $ref: "#/components/pathItems/PublicPost" }
+  /auth/reset-password: { $ref: "#/components/pathItems/PublicPost" }
+  /auth/change-password: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/verify/resend: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/verify/phone: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/verify/email: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/mfa/setup: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/mfa/confirm: { $ref: "#/components/pathItems/AuthPost" }
+  /auth/mfa: { $ref: "#/components/pathItems/AuthDelete" }
+  /storefront/settings: { $ref: "#/components/pathItems/PublicGet" }
+  /storefront/navigation: { $ref: "#/components/pathItems/PublicGet" }
+  /storefront/home: { $ref: "#/components/pathItems/PublicGet" }
+  /products: { $ref: "#/components/pathItems/PublicGet" }
   /products/{slug}:
-    parameters: &slugParam [{ $ref: '#/components/parameters/Slug' }]
-    $ref: '#/components/pathItems/PublicGet'
+    parameters: &slugParam [{ $ref: "#/components/parameters/Slug" }]
+    $ref: "#/components/pathItems/PublicGet"
   /products/{id}/reviews:
     parameters: *idParam
-    $ref: '#/components/pathItems/PublicGet'
-  /categories: { $ref: '#/components/pathItems/PublicGet' }
-  /categories/{slug}: { parameters: *slugParam, $ref: '#/components/pathItems/PublicGet' }
-  /collections: { $ref: '#/components/pathItems/PublicGet' }
-  /collections/{slug}: { parameters: *slugParam, $ref: '#/components/pathItems/PublicGet' }
-  /brands: { $ref: '#/components/pathItems/PublicGet' }
-  /attributes: { $ref: '#/components/pathItems/PublicGet' }
-  /search: { $ref: '#/components/pathItems/PublicGet' }
-  /search/suggestions: { $ref: '#/components/pathItems/PublicGet' }
-  /pages/{slug}: { parameters: *slugParam, $ref: '#/components/pathItems/PublicGet' }
-  /posts: { $ref: '#/components/pathItems/PublicGet' }
-  /posts/{slug}: { parameters: *slugParam, $ref: '#/components/pathItems/PublicGet' }
-  /sitemap-data: { $ref: '#/components/pathItems/PublicGet' }
-  /contact: { $ref: '#/components/pathItems/PublicPost' }
-  /carts: { $ref: '#/components/pathItems/PublicPost' }
-  /carts/current: { $ref: '#/components/pathItems/PublicGet' }
-  /carts/items: { $ref: '#/components/pathItems/PublicPost' }
-  /carts/items/{id}: { parameters: *idParam, $ref: '#/components/pathItems/PublicPatchDelete' }
-  /carts/coupons: { $ref: '#/components/pathItems/PublicPost' }
+    $ref: "#/components/pathItems/PublicGet"
+  /categories: { $ref: "#/components/pathItems/PublicGet" }
+  /categories/{slug}:
+    { parameters: *slugParam, $ref: "#/components/pathItems/PublicGet" }
+  /collections: { $ref: "#/components/pathItems/PublicGet" }
+  /collections/{slug}:
+    { parameters: *slugParam, $ref: "#/components/pathItems/PublicGet" }
+  /brands: { $ref: "#/components/pathItems/PublicGet" }
+  /attributes: { $ref: "#/components/pathItems/PublicGet" }
+  /search: { $ref: "#/components/pathItems/PublicGet" }
+  /search/suggestions: { $ref: "#/components/pathItems/PublicGet" }
+  /pages/{slug}:
+    { parameters: *slugParam, $ref: "#/components/pathItems/PublicGet" }
+  /posts: { $ref: "#/components/pathItems/PublicGet" }
+  /posts/{slug}:
+    { parameters: *slugParam, $ref: "#/components/pathItems/PublicGet" }
+  /sitemap-data: { $ref: "#/components/pathItems/PublicGet" }
+  /contact: { $ref: "#/components/pathItems/PublicPost" }
+  /carts: { $ref: "#/components/pathItems/PublicPost" }
+  /carts/current: { $ref: "#/components/pathItems/PublicGet" }
+  /carts/items: { $ref: "#/components/pathItems/PublicPost" }
+  /carts/items/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/PublicPatchDelete" }
+  /carts/coupons: { $ref: "#/components/pathItems/PublicPost" }
   /carts/coupons/{code}:
-    parameters: [{ $ref: '#/components/parameters/Code' }]
-    $ref: '#/components/pathItems/PublicDelete'
-  /carts/merge: { $ref: '#/components/pathItems/AuthPost' }
-  /checkout/quote: { $ref: '#/components/pathItems/PublicPost' }
-  /orders: { $ref: '#/components/pathItems/AuthGetPublicPost' }
-  /orders/track: { $ref: '#/components/pathItems/PublicPost' }
-  /orders/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AuthGet' }
-  /orders/{id}/cancel: { parameters: *idParam, $ref: '#/components/pathItems/AuthPost' }
-  /payments/bkash/create: { $ref: '#/components/pathItems/PublicPost' }
-  /payments/bkash/callback: { $ref: '#/components/pathItems/PublicGet' }
-  /payments/bkash/recover: { $ref: '#/components/pathItems/PublicPost' }
-  /users/me: { $ref: '#/components/pathItems/AuthGetPatch' }
-  /users/me/addresses: { $ref: '#/components/pathItems/AuthGetPost' }
-  /users/me/addresses/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AuthPatchDelete' }
-  /users/me/privacy-requests: { $ref: '#/components/pathItems/AuthGetPost' }
-  /wishlist: { $ref: '#/components/pathItems/PublicGet' }
-  /wishlist/items: { $ref: '#/components/pathItems/PublicPost' }
-  /wishlist/items/{id}: { parameters: *idParam, $ref: '#/components/pathItems/PublicDelete' }
-  /wishlist/merge: { $ref: '#/components/pathItems/AuthPost' }
-  /reviews: { $ref: '#/components/pathItems/AuthGetPost' }
-  /reviews/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AuthPatchDelete' }
-  /returns: { $ref: '#/components/pathItems/AuthGetPublicPost' }
-  /returns/eligibility: { $ref: '#/components/pathItems/AuthGet' }
-  /returns/guest-eligibility: { $ref: '#/components/pathItems/PublicPost' }
-  /returns/guest-upload: { $ref: '#/components/pathItems/PublicPost' }
-  /returns/guest-lookup: { $ref: '#/components/pathItems/PublicPost' }
-  /returns/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AuthGet' }
-  /returns/{id}/cancel: { parameters: *idParam, $ref: '#/components/pathItems/PublicPost' }
-  /media/upload: { $ref: '#/components/pathItems/AuthPost' }
-  /media/{id}/signed-url: { parameters: *idParam, $ref: '#/components/pathItems/AuthPost' }
-  /media/{id}/download: { parameters: *idParam, $ref: '#/components/pathItems/PublicGet' }
-  /admin/dashboard: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/products: { $ref: '#/components/pathItems/AdminGetPost' }
-  /admin/products/bulk: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/products/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/products/{id}/publication: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/products/{id}/archive: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/products/{id}/restore: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/products/{id}/duplicate: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/products/{id}/variants/generate-preview: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/products/{id}/variants/generate-commit: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/variants/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminPatch' }
-  /admin/variants/{id}/archive: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/variants/{id}/restore: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/categories: &adminListCreate { $ref: '#/components/pathItems/AdminGetPost' }
-  /admin/categories/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/categories/{id}/archive: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/categories/{id}/restore: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/categories/reorder: { $ref: '#/components/pathItems/AdminPost' }
+    parameters: [{ $ref: "#/components/parameters/Code" }]
+    $ref: "#/components/pathItems/PublicDelete"
+  /carts/merge: { $ref: "#/components/pathItems/AuthPost" }
+  /checkout/quote: { $ref: "#/components/pathItems/PublicPost" }
+  /orders: { $ref: "#/components/pathItems/AuthGetPublicPost" }
+  /orders/track: { $ref: "#/components/pathItems/PublicPost" }
+  /orders/{id}: { parameters: *idParam, $ref: "#/components/pathItems/AuthGet" }
+  /orders/{id}/cancel:
+    { parameters: *idParam, $ref: "#/components/pathItems/AuthPost" }
+  /payments/bkash/create: { $ref: "#/components/pathItems/PublicPost" }
+  /payments/bkash/callback: { $ref: "#/components/pathItems/PublicGet" }
+  /payments/bkash/recover: { $ref: "#/components/pathItems/PublicPost" }
+  /users/me: { $ref: "#/components/pathItems/AuthGetPatch" }
+  /users/me/addresses: { $ref: "#/components/pathItems/AuthGetPost" }
+  /users/me/addresses/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AuthPatchDelete" }
+  /users/me/privacy-requests: { $ref: "#/components/pathItems/AuthGetPost" }
+  /wishlist: { $ref: "#/components/pathItems/PublicGet" }
+  /wishlist/items: { $ref: "#/components/pathItems/PublicPost" }
+  /wishlist/items/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/PublicDelete" }
+  /wishlist/merge: { $ref: "#/components/pathItems/AuthPost" }
+  /reviews: { $ref: "#/components/pathItems/AuthGetPost" }
+  /reviews/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AuthPatchDelete" }
+  /returns: { $ref: "#/components/pathItems/AuthGetPublicPost" }
+  /returns/eligibility: { $ref: "#/components/pathItems/AuthGet" }
+  /returns/guest-eligibility: { $ref: "#/components/pathItems/PublicPost" }
+  /returns/guest-upload: { $ref: "#/components/pathItems/PublicPost" }
+  /returns/guest-lookup: { $ref: "#/components/pathItems/PublicPost" }
+  /returns/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AuthGet" }
+  /returns/{id}/cancel:
+    { parameters: *idParam, $ref: "#/components/pathItems/PublicPost" }
+  /media/upload: { $ref: "#/components/pathItems/AuthPost" }
+  /media/{id}/signed-url:
+    { parameters: *idParam, $ref: "#/components/pathItems/AuthPost" }
+  /media/{id}/download:
+    { parameters: *idParam, $ref: "#/components/pathItems/PublicGet" }
+  /admin/dashboard: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/products: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/products/bulk: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/products/{id}/publication:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/{id}/duplicate:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/{id}/variants/generate-preview:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/{id}/variants/generate-commit:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/variants/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/variants/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/variants/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/categories:
+    &adminListCreate { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/categories/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/categories/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/categories/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/categories/reorder: { $ref: "#/components/pathItems/AdminPost" }
   /admin/collections: *adminListCreate
-  /admin/collections/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/collections/{id}/archive: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/collections/{id}/restore: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/collections/reorder: { $ref: '#/components/pathItems/AdminPost' }
+  /admin/collections/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/collections/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/collections/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/collections/reorder: { $ref: "#/components/pathItems/AdminPost" }
   /admin/brands: *adminListCreate
-  /admin/brands/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/brands/{id}/archive: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/brands/{id}/restore: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/brands/reorder: { $ref: '#/components/pathItems/AdminPost' }
+  /admin/brands/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/brands/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/brands/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/brands/reorder: { $ref: "#/components/pathItems/AdminPost" }
   /admin/attributes: *adminListCreate
-  /admin/attributes/{id}/usage: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/inventory/levels: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/inventory/low-stock: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/inventory/movements: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/inventory/adjustments: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/inventory/reconciliations: { $ref: '#/components/pathItems/AdminPost' }
+  /admin/attributes/{id}/usage:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/inventory/levels: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/inventory/low-stock: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/inventory/movements: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/inventory/adjustments: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/inventory/reconciliations: { $ref: "#/components/pathItems/AdminPost" }
   /admin/inventory/locations: *adminListCreate
-  /admin/inventory/locations/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminPatch' }
-  /admin/orders: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/orders/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/orders/{id}/transitions: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/orders/{id}/cancel: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/orders/{id}/notes: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/payments: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/payments/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/payments/{id}/cod-collection: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/payments/{id}/refund-capacity: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/payments/{id}/refunds: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/refunds: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/refunds/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/refunds/{id}/complete: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/refunds/{id}/cancel: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/refunds/{id}/reconcile: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/returns/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/returns/{id}/review: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/approve: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/reject: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/in-transit: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/receive: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/inspect: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/refund: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/exchange: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/complete: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/returns/{id}/events: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/customers: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/customers/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/customers/{id}/notes: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/privacy-requests: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/privacy-requests/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/privacy-requests/{id}/transitions: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
+  /admin/inventory/locations/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/orders: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/orders/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/orders/{id}/transitions:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/orders/{id}/cancel:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/orders/{id}/notes:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/payments: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/payments/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/payments/{id}/cod-collection:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/payments/{id}/refund-capacity:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/payments/{id}/refunds:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/refunds: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/refunds/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/refunds/{id}/complete:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/refunds/{id}/cancel:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/refunds/{id}/reconcile:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/returns/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/returns/{id}/review:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/approve:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/reject:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/in-transit:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/receive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/inspect:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/refund:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/exchange:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/complete:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/returns/{id}/events:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/customers: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/customers/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/customers/{id}/notes:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/privacy-requests: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/privacy-requests/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/privacy-requests/{id}/transitions:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/coupons: *adminListCreate
-  /admin/coupons/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/reviews: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/reviews/{id}/moderate: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/reviews/{id}/respond: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/shipping: { $ref: '#/components/pathItems/AdminGet' }
+  /admin/coupons/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/coupons/{id}/activation:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/coupons/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/coupons/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/coupons/{id}/duplicate:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/coupons/{id}/usage:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/reviews: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/reviews/{id}/moderate:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/reviews/{id}/respond:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/shipping: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/shipping/zones: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/shipping/zones/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/shipping/zones/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/shipping/zones/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/shipping/methods: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/shipping/methods/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/shipping/methods/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/shipping/methods/{id}/restore:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/shipments: *adminListCreate
-  /admin/shipments/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminPatch' }
+  /admin/shipments/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
   /admin/pages: *adminListCreate
-  /admin/pages/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/pages/{id}/revisions: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/pages/{id}/rollback: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
+  /admin/pages/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/pages/{id}/revisions:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/pages/{id}/rollback:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/posts: *adminListCreate
-  /admin/posts/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/posts/{id}/revisions: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/posts/{id}/rollback: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
+  /admin/posts/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/posts/{id}/revisions:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/posts/{id}/rollback:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/home-sections: *adminListCreate
-  /admin/home-sections/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminPatch' }
+  /admin/home-sections/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
   /admin/menus: *adminListCreate
-  /admin/menus/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminPatch' }
-  /admin/theme: { $ref: '#/components/pathItems/AdminGetPut' }
-  /admin/media: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/media/upload: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/media/{id}/status: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/media/{id}/usage: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/notifications/templates: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/notifications/templates/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
-  /admin/notifications/templates/{id}/preview: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/notifications/templates/{id}/test: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/notifications/outbox: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/notifications/outbox/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/notifications/outbox/{id}/retry: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
+  /admin/menus/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/theme: { $ref: "#/components/pathItems/AdminGetPut" }
+  /admin/media: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/media/upload: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/media/{id}/status:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/media/{id}/usage:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/media/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatchDelete" }
+  /admin/media/{id}/signed-url:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/notifications/templates: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/notifications/templates/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/notifications/templates/{id}/preview:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/notifications/templates/{id}/test:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/notifications/outbox: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/notifications/outbox/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/notifications/outbox/{id}/retry:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/reports/{report}:
-    parameters: [{ name: report, in: path, required: true, schema: { type: string } }]
-    $ref: '#/components/pathItems/AdminGet'
-  /admin/exports: { $ref: '#/components/pathItems/AdminGetPost' }
-  /admin/exports/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/settings: { $ref: '#/components/pathItems/AdminGet' }
+    parameters:
+      [{ name: report, in: path, required: true, schema: { type: string } }]
+    $ref: "#/components/pathItems/AdminGet"
+  /admin/reports/summary: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/exports: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/exports/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/exports/{id}/cancel:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/settings: { $ref: "#/components/pathItems/AdminGet" }
   /admin/settings/{key}:
-    parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
-    $ref: '#/components/pathItems/AdminGetPut'
-  /admin/integrations: { $ref: '#/components/pathItems/AdminGet' }
-  /admin/integrations/bkash: { $ref: '#/components/pathItems/AdminPut' }
-  /admin/integrations/bkash/test: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/bkash/enable: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/bkash/disable: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/smtp: { $ref: '#/components/pathItems/AdminPut' }
-  /admin/integrations/smtp/test: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/smtp/enable: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/smtp/disable: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/sms: { $ref: '#/components/pathItems/AdminPut' }
-  /admin/integrations/sms/test: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/sms/enable: { $ref: '#/components/pathItems/AdminPost' }
-  /admin/integrations/sms/disable: { $ref: '#/components/pathItems/AdminPost' }
+    parameters:
+      [{ name: key, in: path, required: true, schema: { type: string } }]
+    $ref: "#/components/pathItems/AdminGetPut"
+  /admin/integrations: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/integrations/bkash: { $ref: "#/components/pathItems/AdminPut" }
+  /admin/integrations/bkash/test: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/bkash/enable: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/bkash/disable:
+    { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/smtp: { $ref: "#/components/pathItems/AdminPut" }
+  /admin/integrations/smtp/test: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/smtp/enable: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/smtp/disable: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/sms: { $ref: "#/components/pathItems/AdminPut" }
+  /admin/integrations/sms/test: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/sms/enable: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/sms/disable: { $ref: "#/components/pathItems/AdminPost" }
   /admin/staff: *adminListCreate
-  /admin/staff/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminGetPatch' }
+  /admin/staff/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/staff/{id}/access:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPut" }
+  /admin/staff/{id}/password-reset:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/staff/{id}/sessions:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/staff/{id}/sessions/{sessionId}:
+    parameters:
+      - { $ref: "#/components/parameters/Id" }
+      - {
+          name: sessionId,
+          in: path,
+          required: true,
+          schema: { $ref: "#/components/schemas/Ulid" },
+        }
+    $ref: "#/components/pathItems/AdminDelete"
+  /admin/permissions: { $ref: "#/components/pathItems/AdminGet" }
   /admin/roles: *adminListCreate
-  /admin/audits: { $ref: '#/components/pathItems/AdminGet' }
+  /admin/roles/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/roles/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/roles/owner-invariant: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/audits: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/contact-messages: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/contact-messages/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
   /admin/webhooks: *adminListCreate
-  /admin/webhooks/{id}: { parameters: *idParam, $ref: '#/components/pathItems/AdminPatch' }
-  /admin/webhooks/{id}/deliveries: { parameters: *idParam, $ref: '#/components/pathItems/AdminGet' }
-  /admin/webhooks/{id}/test: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/webhooks/{id}/rotate-secret: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
-  /admin/webhook-deliveries/{id}/retry: { parameters: *idParam, $ref: '#/components/pathItems/AdminPost' }
+  /admin/webhooks/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatchDelete" }
+  /admin/webhooks/{id}/deliveries:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
+  /admin/webhooks/{id}/test:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/webhooks/{id}/rotate-secret:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/webhook-deliveries/{id}/retry:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
     refreshCookie: { type: apiKey, in: cookie, name: ee_refresh }
   parameters:
-    Id: { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Ulid' } }
-    Slug: { name: slug, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' } }
-    Code: { name: code, in: path, required: true, schema: { type: string, maxLength: 80 } }
+    Id:
+      {
+        name: id,
+        in: path,
+        required: true,
+        schema: { $ref: "#/components/schemas/Ulid" },
+      }
+    Slug:
+      {
+        name: slug,
+        in: path,
+        required: true,
+        schema: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+      }
+    Code:
+      {
+        name: code,
+        in: path,
+        required: true,
+        schema: { type: string, maxLength: 80 },
+      }
   schemas:
-    Ulid: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{26}$', example: 01J00000000000000000000000 }
-    Money: { type: string, pattern: '^\d{1,10}(\.\d{1,2})?$', example: '1850.00' }
-    Meta: { type: [object, 'null'], additionalProperties: true }
+    Ulid:
+      {
+        type: string,
+        pattern: "^[0-9A-HJKMNP-TV-Z]{26}$",
+        example: 01J00000000000000000000000,
+      }
+    Money:
+      { type: string, pattern: '^\d{1,10}(\.\d{1,2})?$', example: "1850.00" }
+    Meta: { type: [object, "null"], additionalProperties: true }
     SuccessEnvelope:
       type: object
       required: [data, requestId]
       properties:
         data: {}
-        meta: { $ref: '#/components/schemas/Meta' }
+        meta: { $ref: "#/components/schemas/Meta" }
         requestId: { type: string, example: 01JREQUEST00000000000000000 }
     ErrorEnvelope:
       type: object
@@ -261,7 +432,11 @@ components:
           properties:
             code: { type: string, example: VALIDATION_ERROR }
             message: { type: string, example: Check the submitted values. }
-            fieldErrors: { type: [object, 'null'], additionalProperties: { type: array, items: { type: string } } }
+            fieldErrors:
+              {
+                type: [object, "null"],
+                additionalProperties: { type: array, items: { type: string } },
+              }
         requestId: { type: string, example: 01JREQUEST00000000000000000 }
     WritePayload: { type: object, additionalProperties: true }
   requestBodies:
@@ -269,52 +444,280 @@ components:
       required: true
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/WritePayload' }
+          schema: { $ref: "#/components/schemas/WritePayload" }
   responses:
     Success:
       description: Authoritative response envelope.
-      content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } }
+      content:
+        {
+          application/json:
+            { schema: { $ref: "#/components/schemas/SuccessEnvelope" } },
+        }
     NoContent: { description: Operation completed without a response body. }
     ValidationError:
       description: Input failed validation.
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' }, example: { error: { code: VALIDATION_ERROR, message: Check the submitted values., fieldErrors: { phone: [Enter a valid phone number.] } }, requestId: 01JREQUEST00000000000000000 } } }
+      content:
+        {
+          application/json:
+            {
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+              example:
+                {
+                  error:
+                    {
+                      code: VALIDATION_ERROR,
+                      message: Check the submitted values.,
+                      fieldErrors: { phone: [Enter a valid phone number.] },
+                    },
+                  requestId: 01JREQUEST00000000000000000,
+                },
+            },
+        }
     Unauthorized:
       description: Authentication is required or expired.
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' }, example: { error: { code: UNAUTHENTICATED, message: Authentication is required. }, requestId: 01JREQUEST00000000000000000 } } }
+      content:
+        {
+          application/json:
+            {
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+              example:
+                {
+                  error:
+                    {
+                      code: UNAUTHENTICATED,
+                      message: Authentication is required.,
+                    },
+                  requestId: 01JREQUEST00000000000000000,
+                },
+            },
+        }
     Forbidden:
       description: The actor lacks the required permission.
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' }, example: { error: { code: FORBIDDEN, message: You do not have permission to perform this action. }, requestId: 01JREQUEST00000000000000000 } } }
+      content:
+        {
+          application/json:
+            {
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+              example:
+                {
+                  error:
+                    {
+                      code: FORBIDDEN,
+                      message: You do not have permission to perform this action.,
+                    },
+                  requestId: 01JREQUEST00000000000000000,
+                },
+            },
+        }
     Conflict:
       description: State, version, or idempotency conflict.
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' }, example: { error: { code: VERSION_CONFLICT, message: This record changed. Refresh and review it. }, requestId: 01JREQUEST00000000000000000 } } }
+      content:
+        {
+          application/json:
+            {
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+              example:
+                {
+                  error:
+                    {
+                      code: VERSION_CONFLICT,
+                      message: This record changed. Refresh and review it.,
+                    },
+                  requestId: 01JREQUEST00000000000000000,
+                },
+            },
+        }
   pathItems:
     PublicGet:
-      get: &publicGetOperation { tags: [Storefront], responses: { '200': { $ref: '#/components/responses/Success' }, '422': { $ref: '#/components/responses/ValidationError' } } }
+      get:
+        &publicGetOperation {
+          tags: [Storefront],
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
     PublicPost:
-      post: &publicPostOperation { tags: [Commerce], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '201': { $ref: '#/components/responses/Success' }, '202': { $ref: '#/components/responses/Success' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
-    PublicDelete: { delete: { tags: [Commerce], responses: { '200': { $ref: '#/components/responses/Success' }, '204': { $ref: '#/components/responses/NoContent' } } } }
+      post:
+        &publicPostOperation {
+          tags: [Commerce],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "201": { $ref: "#/components/responses/Success" },
+              "202": { $ref: "#/components/responses/Success" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
+    PublicDelete:
+      {
+        delete:
+          {
+            tags: [Commerce],
+            responses:
+              {
+                "200": { $ref: "#/components/responses/Success" },
+                "204": { $ref: "#/components/responses/NoContent" },
+              },
+          },
+      }
     PublicPatchDelete:
-      patch: { tags: [Commerce], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
-      delete: { tags: [Commerce], responses: { '200': { $ref: '#/components/responses/Success' }, '204': { $ref: '#/components/responses/NoContent' } } }
+      patch:
+        {
+          tags: [Commerce],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
+      delete:
+        {
+          tags: [Commerce],
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "204": { $ref: "#/components/responses/NoContent" },
+            },
+        }
     AuthGet:
-      get: &authGetOperation { tags: [Account], security: [{ bearerAuth: [] }], responses: { '200': { $ref: '#/components/responses/Success' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } } }
+      get:
+        &authGetOperation {
+          tags: [Account],
+          security: [{ bearerAuth: [] }],
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "401": { $ref: "#/components/responses/Unauthorized" },
+              "403": { $ref: "#/components/responses/Forbidden" },
+            },
+        }
     AuthPost:
-      post: &authPostOperation { tags: [Account], security: [{ bearerAuth: [] }], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '401': { $ref: '#/components/responses/Unauthorized' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
-    AuthDelete: { delete: { tags: [Account], security: [{ bearerAuth: [] }], responses: { '200': { $ref: '#/components/responses/Success' }, '204': { $ref: '#/components/responses/NoContent' }, '401': { $ref: '#/components/responses/Unauthorized' } } } }
+      post:
+        &authPostOperation {
+          tags: [Account],
+          security: [{ bearerAuth: [] }],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "401": { $ref: "#/components/responses/Unauthorized" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
+    AuthDelete:
+      {
+        delete:
+          {
+            tags: [Account],
+            security: [{ bearerAuth: [] }],
+            responses:
+              {
+                "200": { $ref: "#/components/responses/Success" },
+                "204": { $ref: "#/components/responses/NoContent" },
+                "401": { $ref: "#/components/responses/Unauthorized" },
+              },
+          },
+      }
     AuthGetPatch:
       get: *authGetOperation
-      patch: &authPatchOperation { tags: [Account], security: [{ bearerAuth: [] }], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
+      patch:
+        &authPatchOperation {
+          tags: [Account],
+          security: [{ bearerAuth: [] }],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
     AuthGetPost: { get: *authGetOperation, post: *authPostOperation }
-    AuthPatchDelete: { patch: *authPatchOperation, delete: { tags: [Account], security: [{ bearerAuth: [] }], responses: { '204': { $ref: '#/components/responses/NoContent' } } } }
+    AuthPatchDelete:
+      {
+        patch: *authPatchOperation,
+        delete:
+          {
+            tags: [Account],
+            security: [{ bearerAuth: [] }],
+            responses: { "204": { $ref: "#/components/responses/NoContent" } },
+          },
+      }
     AuthGetPublicPost: { get: *authGetOperation, post: *publicPostOperation }
     AdminGet:
-      get: &adminGetOperation { tags: [Administration], security: [{ bearerAuth: [] }], responses: { '200': { $ref: '#/components/responses/Success' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } } }
+      get:
+        &adminGetOperation {
+          tags: [Administration],
+          security: [{ bearerAuth: [] }],
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "401": { $ref: "#/components/responses/Unauthorized" },
+              "403": { $ref: "#/components/responses/Forbidden" },
+            },
+        }
     AdminPost:
-      post: &adminPostOperation { tags: [Administration], security: [{ bearerAuth: [] }], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '201': { $ref: '#/components/responses/Success' }, '202': { $ref: '#/components/responses/Success' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
+      post:
+        &adminPostOperation {
+          tags: [Administration],
+          security: [{ bearerAuth: [] }],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "201": { $ref: "#/components/responses/Success" },
+              "202": { $ref: "#/components/responses/Success" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
     AdminPatch:
-      patch: &adminPatchOperation { tags: [Administration], security: [{ bearerAuth: [] }], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
+      patch:
+        &adminPatchOperation {
+          tags: [Administration],
+          security: [{ bearerAuth: [] }],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
     AdminPut:
-      put: &adminPutOperation { tags: [Administration], security: [{ bearerAuth: [] }], requestBody: { $ref: '#/components/requestBodies/JsonWrite' }, responses: { '200': { $ref: '#/components/responses/Success' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } } }
+      put:
+        &adminPutOperation {
+          tags: [Administration],
+          security: [{ bearerAuth: [] }],
+          requestBody: { $ref: "#/components/requestBodies/JsonWrite" },
+          responses:
+            {
+              "200": { $ref: "#/components/responses/Success" },
+              "409": { $ref: "#/components/responses/Conflict" },
+              "422": { $ref: "#/components/responses/ValidationError" },
+            },
+        }
     AdminGetPost: { get: *adminGetOperation, post: *adminPostOperation }
     AdminGetPatch: { get: *adminGetOperation, patch: *adminPatchOperation }
     AdminGetPut: { get: *adminGetOperation, put: *adminPutOperation }
+    AdminDelete:
+      delete:
+        &adminDeleteOperation {
+          tags: [Administration],
+          security: [{ bearerAuth: [] }],
+          responses:
+            {
+              "204": { $ref: "#/components/responses/NoContent" },
+              "401": { $ref: "#/components/responses/Unauthorized" },
+              "403": { $ref: "#/components/responses/Forbidden" },
+            },
+        }
+    AdminPatchDelete:
+      { patch: *adminPatchOperation, delete: *adminDeleteOperation }
