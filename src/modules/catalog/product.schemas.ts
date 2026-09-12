@@ -41,7 +41,7 @@ const variantFields = {
   costPrice: productMoneySchema.nullable().optional(),
   saleStartsAt: dateTime,
   saleEndsAt: dateTime,
-  stockPolicy: z.enum(["deny", "allow_backorder", "preorder"]).default("deny"),
+  stockPolicy: z.enum(["deny", "allow_backorder", "preorder", "available"]).default("deny"),
   preorderAvailableAt: dateTime,
   preorderMessage: z.string().trim().max(255).nullable().optional(),
   weightGrams: z.number().int().min(0).max(10_000_000).nullable().optional(),
@@ -56,7 +56,7 @@ interface VariantValue {
   salePrice?: string | null;
   saleStartsAt?: string | null;
   saleEndsAt?: string | null;
-  stockPolicy: "deny" | "allow_backorder" | "preorder";
+  stockPolicy: "deny" | "allow_backorder" | "preorder" | "available";
   preorderAvailableAt?: string | null;
   isDefault?: boolean;
   status: "active" | "archived";

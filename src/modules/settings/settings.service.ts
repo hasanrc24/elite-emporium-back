@@ -83,7 +83,7 @@ const schemas: RuntimeValue = {
   }),
   inventory: z.object({
     defaultStockPolicy: z
-      .enum(["deny", "allow_backorder", "preorder"])
+      .enum(["deny", "allow_backorder", "preorder", "available"])
       .default("deny"),
     lowStockThreshold: z.number().int().min(0).max(1_000_000).default(3),
     showExactStock: z.boolean().default(true),
@@ -248,9 +248,12 @@ export async function getPublicSettings() {
     string,
     ReturnType<typeof JSON.parse>
   > = structuredClone(defaultPublicSettings);
-  for (const row of rows)
-    if (publicGroups.has(row.key) || row.key === "theme")
-      settings[row.key] = row.value;
+  for (const row of rows) {
+    if (publicGroups.has(row.key) || row.key === "theme") {
+      const value = row.value;
+      settings[row.key] = typeof value === 'string' ? JSON.parse(value) : value;
+    }
+  }
   settings.shippingMethods = shippingMethods.map((method: RuntimeValue) => ({
     code: method.code,
     label: method.labels,
@@ -288,27 +291,31 @@ export async function listSettingGroups() {
   const byKey: RuntimeValue = new Map(
     rows.map((row: RuntimeValue) => [row.key, row]),
   );
-  return Object.keys(schemas).map((key: RuntimeValue) => ({
-    key,
-    value:
-      byKey.get(key)?.value ??
+  return Object.keys(schemas).map((key: RuntimeValue) => {
+    const raw = byKey.get(key)?.value ??
       (defaultPublicSettings as Record<string, unknown>)[key] ??
-      {},
-    version: byKey.get(key)?.version ?? 0,
-    isPublic: publicGroups.has(key),
-    updatedAt: byKey.get(key)?.updatedAt || null,
-  }));
+      {};
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return {
+      key,
+      value,
+      version: byKey.get(key)?.version ?? 0,
+      isPublic: publicGroups.has(key),
+      updatedAt: byKey.get(key)?.updatedAt || null,
+    };
+  });
 }
 
 export async function getSettingGroup(key: string) {
   if (!(key in schemas)) throw AppError.notFound("Settings group not found.");
   const row: RuntimeValue = await StoreSetting.findOne({ where: { key } });
+  const raw = row?.value ??
+    (defaultPublicSettings as Record<string, unknown>)[key] ??
+    {};
+  const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
   return {
     key,
-    value:
-      row?.value ??
-      (defaultPublicSettings as Record<string, unknown>)[key] ??
-      {},
+    value,
     version: row?.version ?? 0,
     isPublic: publicGroups.has(key),
     updatedAt: row?.updatedAt || null,

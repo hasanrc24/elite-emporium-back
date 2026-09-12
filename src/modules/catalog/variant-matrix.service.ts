@@ -364,7 +364,7 @@ export async function commitVariantMatrix(
         { transaction },
       );
       await variant.setAttributeValues(row.attributeValueIds, { transaction });
-      const onHand: RuntimeValue = Number(row.initialStock || 0);
+      const onHand: RuntimeValue = row.stockPolicy === "available" ? 0 : Number(row.initialStock || 0);
       await InventoryLevel.create(
         {
           id: newId(),
@@ -475,6 +475,17 @@ export async function updateVariant(
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
+    const location: RuntimeValue = await StockLocation.findOne({
+      where: { active: true },
+      order: [["createdAt", "ASC"]],
+      transaction,
+      lock: transaction.LOCK.SHARE,
+    });
+    if (!location)
+      throw AppError.unprocessable(
+        "STOCK_LOCATION_REQUIRED",
+        "Create an active stock location before updating variant stock.",
+      );
     const before: RuntimeValue = {
       sku: variant.sku,
       title: variant.title,
@@ -507,6 +518,52 @@ export async function updateVariant(
           transaction,
         },
       );
+    }
+    if (payload.initialStock != null) {
+      const [level] = await InventoryLevel.findOrCreate({
+        where: { variantId: variant.id, locationId: location.id },
+        defaults: {
+          id: newId(),
+          variantId: variant.id,
+          locationId: location.id,
+          onHand: 0,
+          reserved: 0,
+          lowStockThreshold: payload.lowStockThreshold ?? 3,
+          version: 1,
+        },
+        transaction,
+      });
+      await level.reload({ transaction, lock: transaction.LOCK.UPDATE });
+      const delta = Number(payload.initialStock) - Number(level.onHand);
+      if (delta !== 0) {
+        const nextOnHand = Number(level.onHand) + delta;
+        if (nextOnHand < 0)
+          throw AppError.unprocessable(
+            "NEGATIVE_INVENTORY",
+            "This adjustment would make on-hand inventory negative.",
+          );
+        level.onHand = nextOnHand;
+        if (payload.lowStockThreshold != null)
+          level.lowStockThreshold = payload.lowStockThreshold;
+        level.version += 1;
+        await level.save({ transaction });
+        await InventoryMovement.create(
+          {
+            id: newId(),
+            variantId: variant.id,
+            locationId: location.id,
+            actorId,
+            quantityDelta: delta,
+            reservedDelta: 0,
+            onHandBefore: Number(level.onHand) - delta,
+            balanceAfter: nextOnHand,
+            reservedAfter: Number(level.reserved),
+            reason: "manual_correction",
+            correlationId: `variant:${variant.id}`,
+          },
+          { transaction },
+        );
+      }
     }
     product.version += 1;
     await product.save({ transaction });

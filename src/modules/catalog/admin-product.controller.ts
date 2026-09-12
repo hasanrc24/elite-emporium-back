@@ -55,7 +55,7 @@ const matrixRow = z
     saleStartsAt: z.iso.datetime().nullable().optional(),
     saleEndsAt: z.iso.datetime().nullable().optional(),
     stockPolicy: z
-      .enum(["deny", "allow_backorder", "preorder"])
+      .enum(["deny", "allow_backorder", "preorder", "available"])
       .default("deny"),
     preorderAvailableAt: z.iso.datetime().nullable().optional(),
     preorderMessage: z.string().trim().max(255).nullable().optional(),

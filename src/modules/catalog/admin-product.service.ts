@@ -635,6 +635,45 @@ async function syncVariants(
         { ...variantValues(item), version: variant.version + 1 },
         { transaction },
       );
+      if (item.initialStock != null && item.stockPolicy !== "available") {
+        const level = await InventoryLevel.findOne({
+          where: { variantId: variant.id },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        if (level) {
+          const delta = Number(item.initialStock) - Number(level.onHand);
+          if (delta !== 0) {
+            const nextOnHand = Number(level.onHand) + delta;
+            if (nextOnHand < 0)
+              throw AppError.unprocessable(
+                "NEGATIVE_INVENTORY",
+                "This adjustment would make on-hand inventory negative.",
+              );
+            level.onHand = nextOnHand;
+            if (item.lowStockThreshold != null)
+              level.lowStockThreshold = Number(item.lowStockThreshold);
+            level.version += 1;
+            await level.save({ transaction });
+            await InventoryMovement.create(
+              {
+                id: newId(),
+                variantId: variant.id,
+                locationId: level.locationId,
+                actorId,
+                quantityDelta: delta,
+                reservedDelta: 0,
+                onHandBefore: Number(level.onHand) - delta,
+                balanceAfter: nextOnHand,
+                reservedAfter: Number(level.reserved),
+                reason: "manual_correction",
+                correlationId: `product:${product.id}:variant:${variant.id}`,
+              },
+              { transaction },
+            );
+          }
+        }
+      }
     } else {
       variant = await ProductVariant.create(
         {
@@ -645,30 +684,30 @@ async function syncVariants(
         },
         { transaction },
       );
-      const onHand: RuntimeValue = Number(item.initialStock || 0);
+      const effectiveOnHand: RuntimeValue = item.stockPolicy === "available" ? 0 : Number(item.initialStock || 0);
       await InventoryLevel.create(
         {
           id: newId(),
           variantId: variant.id,
           locationId: defaultLocation.id,
-          onHand,
+          onHand: effectiveOnHand,
           reserved: 0,
           lowStockThreshold: Number(item.lowStockThreshold ?? 3),
           version: 1,
         },
         { transaction },
       );
-      if (onHand)
+      if (effectiveOnHand)
         await InventoryMovement.create(
           {
             id: newId(),
             variantId: variant.id,
             locationId: defaultLocation.id,
             actorId,
-            quantityDelta: onHand,
+            quantityDelta: effectiveOnHand,
             reservedDelta: 0,
             onHandBefore: 0,
-            balanceAfter: onHand,
+            balanceAfter: effectiveOnHand,
             reservedAfter: 0,
             reason: "initial_stock",
             correlationId: `product:${product.id}:variant:${variant.id}`,

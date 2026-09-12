@@ -815,35 +815,36 @@ export async function createProduct(
         { transaction },
       );
       variantIdBySku.set(item.sku.toLocaleLowerCase("en"), variant.id);
-      await InventoryLevel.create(
-        {
-          id: newId(),
-          variantId: variant.id,
-          locationId: location.id,
-          onHand: item.stock,
-          reserved: 0,
-          lowStockThreshold: item.lowStockThreshold,
-          version: 1,
-        },
-        { transaction },
-      );
-      if (item.stock)
-        await InventoryMovement.create(
-          {
-            id: newId(),
-            variantId: variant.id,
-            locationId: location.id,
-            actorId,
-            quantityDelta: item.stock,
-            reservedDelta: 0,
-            onHandBefore: 0,
-            balanceAfter: item.stock,
-            reservedAfter: 0,
-            reason: "initial_stock",
-            correlationId: `product:${product.id}:variant:${variant.id}`,
-          },
-          { transaction },
-        );
+const effectiveOnHand: RuntimeValue = item.stockPolicy === "available" ? 0 : item.stock;
+       await InventoryLevel.create(
+         {
+           id: newId(),
+           variantId: variant.id,
+           locationId: location.id,
+           onHand: effectiveOnHand,
+           reserved: 0,
+           lowStockThreshold: item.lowStockThreshold,
+           version: 1,
+         },
+         { transaction },
+       );
+       if (effectiveOnHand)
+         await InventoryMovement.create(
+           {
+             id: newId(),
+             variantId: variant.id,
+             locationId: location.id,
+             actorId,
+             quantityDelta: effectiveOnHand,
+             reservedDelta: 0,
+             onHandBefore: 0,
+             balanceAfter: effectiveOnHand,
+             reservedAfter: 0,
+             reason: "initial_stock",
+             correlationId: `product:${product.id}:variant:${variant.id}`,
+           },
+           { transaction },
+         );
       if (item.attributeValueIds?.length)
         await variant.setAttributeValues(item.attributeValueIds, {
           transaction,

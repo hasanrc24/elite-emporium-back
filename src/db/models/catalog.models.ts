@@ -329,8 +329,8 @@ initializeModel(
     costPrice: DataTypes.DECIMAL(12, 2),
     saleStartsAt: DataTypes.DATE,
     saleEndsAt: DataTypes.DATE,
-    stockPolicy: {
-      type: DataTypes.ENUM("deny", "allow_backorder", "preorder"),
+     stockPolicy: {
+      type: DataTypes.ENUM("deny", "allow_backorder", "preorder", "available"),
       allowNull: false,
       defaultValue: "deny",
     },
