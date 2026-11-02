@@ -37,6 +37,34 @@ initializeModel(
 );
 
 /** @type {any} */
+export class MetaCapiEvent extends DynamicModel {}
+initializeModel(
+  MetaCapiEvent,
+  {
+    id: primaryId(),
+    eventId: { type: DataTypes.STRING(120), allowNull: false, unique: true },
+    eventName: { type: DataTypes.STRING(40), allowNull: false },
+    eventTime: { type: DataTypes.DATE, allowNull: false },
+    payload: { type: DataTypes.JSON, allowNull: false },
+    status: {
+      type: DataTypes.ENUM("held", "pending", "processing", "sent", "failed"),
+      allowNull: false,
+      defaultValue: "pending",
+    },
+    attempts: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    nextAttemptAt: { type: DataTypes.DATE, allowNull: false },
+    leaseUntil: DataTypes.DATE,
+    lastError: DataTypes.STRING(500),
+    sentAt: DataTypes.DATE,
+  },
+  { modelName: "MetaCapiEvent", tableName: "meta_capi_events" },
+);
+
+/** @type {any} */
 export class ManualPaymentClaim extends DynamicModel {}
 initializeModel(
   ManualPaymentClaim,

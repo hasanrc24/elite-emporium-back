@@ -21,6 +21,7 @@ import * as confirmations from "../modules/orders/confirmation.service.js";
 import * as risk from "../modules/orders/risk.service.js";
 import * as orders from "../modules/orders/order.service.js";
 import * as manualPayments from "../modules/payments/manual-payment.service.js";
+import * as tracking from "../modules/tracking/meta-capi.service.js";
 import * as payments from "../modules/payments/payment.service.js";
 import * as refunds from "../modules/payments/refund.service.js";
 import * as coupons from "../modules/promotions/admin-coupon.service.js";
@@ -147,6 +148,7 @@ export class ApplicationServices {
     rollbackContent: content.rollbackContent,
     saveContent: content.saveContent,
     saveHomeSection: content.saveHomeSection,
+    archiveHomeSection: content.archiveHomeSection,
     saveMenu: content.saveMenu,
     saveTheme: content.saveTheme,
     sitemapData: content.sitemapData,
@@ -189,7 +191,9 @@ export class ApplicationServices {
     updateLocation: inventory.updateLocation,
   };
   readonly media = {
+    archiveManyMedia: media.archiveManyMedia,
     archiveMedia: media.archiveMedia,
+    listMedia: media.listMedia,
     mediaDto: media.mediaDto,
     mediaUsage: media.mediaUsage,
     updateMedia: media.updateMedia,
@@ -241,6 +245,11 @@ export class ApplicationServices {
     rejectManualPayment: manualPayments.rejectManualPayment,
     submitManualPayment: manualPayments.submitManualPayment,
     verifyManualPayment: manualPayments.verifyManualPayment,
+  };
+  readonly tracking = {
+    connectMetaCapi: tracking.connectMetaCapi,
+    getMetaCapiStatus: tracking.getMetaCapiStatus,
+    recordClientEvents: tracking.recordClientEvents,
   };
   readonly payments = {
     processBkashCallback: payments.processBkashCallback,

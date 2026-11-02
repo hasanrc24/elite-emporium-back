@@ -13,6 +13,7 @@ import { likeContains } from "../../lib/like.js";
 import { moneyString } from "../../lib/money.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
 import { recordAudit } from "../audits/audit.service.js";
+import { generateMethodCode } from "./method-code.js";
 
 function safeTrackingUrl(input: RuntimeValue) {
   if (!input) return null;
@@ -139,15 +140,6 @@ export async function saveMethod(
   request: RuntimeValue,
 ) {
   return sequelize.transaction(async (transaction: RuntimeValue) => {
-    const zone: RuntimeValue = await ShippingZone.findOne({
-      where: { id: payload.zoneId, active: true },
-      transaction,
-    });
-    if (!zone)
-      throw AppError.unprocessable(
-        "INVALID_SHIPPING_ZONE",
-        "Choose an active shipping zone.",
-      );
     let row: RuntimeValue = id
       ? await ShippingMethod.findByPk(id, {
           paranoid: false,
@@ -155,6 +147,43 @@ export async function saveMethod(
           lock: transaction.LOCK.UPDATE,
         })
       : null;
+    const values: RuntimeValue = { ...payload };
+    if (row) {
+      // The zone and code are what orders point at: never changed by an edit.
+      values.zoneId = values.zoneId || row.zoneId;
+      values.code = row.code;
+    } else {
+      if (!values.code)
+        values.code = generateMethodCode(
+          String(values.labelEn),
+          newId().slice(-6),
+        );
+      if (!values.zoneId) {
+        const created: RuntimeValue = await ShippingZone.create(
+          {
+            id: newId(),
+            code: values.code,
+            nameEn: values.labelEn,
+            nameBn: values.labelBn,
+            matchMode: "selector",
+            priority: 0,
+            active: true,
+            version: 1,
+          },
+          { transaction },
+        );
+        values.zoneId = created.id;
+      }
+    }
+    const zone: RuntimeValue = await ShippingZone.findOne({
+      where: { id: values.zoneId, active: true },
+      transaction,
+    });
+    if (!zone)
+      throw AppError.unprocessable(
+        "INVALID_SHIPPING_ZONE",
+        "Choose an active shipping zone.",
+      );
     if (id && !row) throw AppError.notFound("Shipping method not found.");
     if (row?.deletedAt)
       throw AppError.conflict(
@@ -169,12 +198,12 @@ export async function saveMethod(
     const before: RuntimeValue = row ? methodDto(row) : null;
     if (!row)
       row = await ShippingMethod.create(
-        { id: newId(), ...payload, version: 1 },
+        { id: newId(), ...values, version: 1 },
         { transaction },
       );
     else
       await row.update(
-        { ...payload, version: row.version + 1 },
+        { ...values, version: row.version + 1 },
         { transaction },
       );
     await recordAudit({
@@ -214,6 +243,20 @@ export async function archiveShippingResource(
       throw AppError.conflict(
         "ZONE_HAS_METHODS",
         "Disable or archive this zone’s shipping methods first.",
+      );
+    // Checkout needs at least one method to offer.
+    if (
+      kind === "method" &&
+      row.active &&
+      !(await ShippingMethod.count({
+        where: { active: true, id: { [Op.ne]: id } },
+        include: [{ model: ShippingZone, as: "zone", where: { active: true } }],
+        transaction,
+      }))
+    )
+      throw AppError.conflict(
+        "LAST_DELIVERY_METHOD",
+        "Add another delivery method before deleting this one, so customers can still check out.",
       );
     row.active = false;
     row.version += 1;

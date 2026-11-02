@@ -189,10 +189,20 @@ const schemas: RuntimeValue = {
     smsEnabled: z.boolean().default(false),
     orderEvents: z.array(z.string().max(100)).max(100).default([]),
   }),
+  homepage: z.object({
+    showCategories: z.boolean().default(true),
+    showNewArrivals: z.boolean().default(true),
+    showFeatured: z.boolean().default(true),
+    showOnSale: z.boolean().default(true),
+    showCollections: z.boolean().default(true),
+    showTrustStrip: z.boolean().default(true),
+  }),
   analytics: z.object({
     consentRequired: z.boolean().default(true),
     provider: z.enum(["none", "ga4", "meta"]).default("none"),
     publicMeasurementId: z.string().max(100).nullable().optional(),
+    // Meta only: also send conversions from the server (Conversions API).
+    serverSide: z.boolean().default(false),
   }),
   seo: z.object({
     defaultTitle: z.string().max(255),
@@ -288,10 +298,19 @@ export const defaultPublicSettings: RuntimeValue = {
     mediaEnabled: true,
   },
   notifications: { emailEnabled: true, smsEnabled: false, orderEvents: [] },
+  homepage: {
+    showCategories: true,
+    showNewArrivals: true,
+    showFeatured: true,
+    showOnSale: true,
+    showCollections: true,
+    showTrustStrip: true,
+  },
   analytics: {
     consentRequired: true,
     provider: "none",
     publicMeasurementId: null,
+    serverSide: false,
   },
   seo: {
     defaultTitle: "Elite Emporium",
@@ -329,6 +348,7 @@ const publicGroups = new Set([
   "verification",
   "returns",
   "manualWallet",
+  "homepage",
   "reviews",
   "analytics",
   "seo",

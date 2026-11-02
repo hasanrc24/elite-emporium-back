@@ -79,6 +79,7 @@ paths:
   /orders: { $ref: "#/components/pathItems/AuthGetPublicPost" }
   /orders/track: { $ref: "#/components/pathItems/PublicPost" }
   /orders/manual-payment: { $ref: "#/components/pathItems/PublicPost" }
+  /tracking/events: { $ref: "#/components/pathItems/PublicPost" }
   /orders/confirmation: { $ref: "#/components/pathItems/PublicPost" }
   /orders/confirmation/lookup: { $ref: "#/components/pathItems/PublicPost" }
   /locations: { $ref: "#/components/pathItems/PublicGet" }
@@ -327,12 +328,15 @@ paths:
   /admin/home-sections: *adminListCreate
   /admin/home-sections/{id}:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/home-sections/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/menus: *adminListCreate
   /admin/menus/{id}:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
   /admin/theme: { $ref: "#/components/pathItems/AdminGetPut" }
   /admin/media: { $ref: "#/components/pathItems/AdminGet" }
   /admin/media/upload: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/media/bulk-delete: { $ref: "#/components/pathItems/AdminPost" }
   /admin/media/{id}/status:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
   /admin/media/{id}/usage:
@@ -517,6 +521,10 @@ paths:
   /admin/integrations/smtp/test: { $ref: "#/components/pathItems/AdminPost" }
   /admin/integrations/smtp/enable: { $ref: "#/components/pathItems/AdminPost" }
   /admin/integrations/smtp/disable: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/integrations/meta-capi/status:
+    { $ref: "#/components/pathItems/AdminGet" }
+  /admin/integrations/meta-capi/connect:
+    { $ref: "#/components/pathItems/AdminPost" }
   /admin/integrations/sms: { $ref: "#/components/pathItems/AdminPut" }
   /admin/integrations/sms/test: { $ref: "#/components/pathItems/AdminPost" }
   /admin/integrations/sms/enable: { $ref: "#/components/pathItems/AdminPost" }

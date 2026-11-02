@@ -22,7 +22,6 @@ import {
 } from "../../app/request-security.js";
 import { MediaAsset } from "../../db/models.js";
 import { AppError } from "../../lib/errors.js";
-import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import {
   readMedia,
   signPrivateMedia,
@@ -37,26 +36,34 @@ export class AdminMediaController {
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
   @Permissions("media.manage")
+  @ValidateRequest(
+    z.object({
+      ids: z.array(z.string().length(26)).min(1).max(100),
+    }),
+  )
+  @Post("/bulk-delete")
+  async bulkDelete(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    response.json({
+      data: await this.services.media.archiveManyMedia(
+        request.body.ids,
+        request.auth.user.id,
+        request,
+      ),
+      meta: null,
+      requestId: request.id,
+    });
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("media.manage")
   @Get("/")
   route0(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
-      const { page, pageSize, limit, offset } = pagination(req.query);
-      const result = await MediaAsset.findAndCountAll({
-        limit,
-        offset,
-        order: [["createdAt", "DESC"]],
-      });
-      res.json({
-        ...pageEnvelope(
-          {
-            rows: result.rows.map(this.services.media.mediaDto),
-            count: result.count,
-          },
-          page,
-          pageSize,
-        ),
-        requestId: req.id,
-      });
+      const result = await this.services.media.listMedia(req.query);
+      res.json({ ...result, requestId: req.id });
     })(request, response);
   }
 

@@ -111,6 +111,7 @@ export const {
 export const {
   OrderConfirmation,
   ManualPaymentClaim,
+  MetaCapiEvent,
   RiskBlocklist,
   BdLocation,
   SearchSynonym,

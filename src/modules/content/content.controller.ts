@@ -531,6 +531,21 @@ export class AdminContentController {
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
   @Permissions("cms.manage")
+  @Post("/home-sections/:id/archive")
+  async archiveHomeSection(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    await this.services.content.archiveHomeSection(
+      request.params.id,
+      request.auth.user.id,
+      request,
+    );
+    response.status(204).end();
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("cms.manage")
   @Get("/menus")
   route15(
     @Req() request: Request,

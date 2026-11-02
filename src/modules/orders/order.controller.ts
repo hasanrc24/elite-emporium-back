@@ -54,6 +54,15 @@ const attribution = z
   })
   .nullable()
   .optional();
+const tracking = z
+  .object({
+    consent: z.boolean().optional(),
+    fbp: z.string().max(100).optional(),
+    fbc: z.string().max(400).optional(),
+    sourceUrl: z.string().max(1000).optional(),
+  })
+  .nullable()
+  .optional();
 const quoteSchema = z.object({
   customer,
   address,
@@ -63,6 +72,7 @@ const quoteSchema = z.object({
   locale: z.enum(["en", "bn"]).default("en"),
   note: z.string().trim().max(1000).optional().default(""),
   attribution,
+  tracking,
 });
 const orderSchema = z.object({ quoteId: z.string().length(26) });
 

@@ -1,5 +1,5 @@
 import { fileTypeFromBuffer } from "file-type";
-import { QueryTypes } from "sequelize";
+import { Op, QueryTypes, literal } from "sequelize";
 import { env } from "../../config/env.js";
 import {
   AttributeValue,
@@ -15,6 +15,8 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
+import { pageEnvelope, pagination } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
 import {
   discardMedia,
@@ -47,6 +49,7 @@ export function mediaDto(asset: DynamicModel) {
     privacy: asset.privacy,
     status: asset.status,
     altText: asset.altText,
+    purpose: metadata.purpose || "library",
     url: asset.privacy === "public" ? mediaPublicUrl(asset.storageKey) : null,
     variants: metadata.variants || [],
     createdAt: asset.createdAt,
@@ -167,6 +170,34 @@ export async function uploadMedia({
   }
 }
 
+// Files created for exports and customer evidence are not library content.
+const hiddenPurposes = literal(
+  "(JSON_UNQUOTE(JSON_EXTRACT(`MediaAsset`.`metadata`, '$.purpose')) IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(`MediaAsset`.`metadata`, '$.purpose')) NOT IN ('export', 'return', 'review'))",
+);
+
+/** The media library: archived files are hidden unless asked for. */
+export async function listMedia(query: RuntimeValue) {
+  const { page, pageSize, limit, offset }: RuntimeValue = pagination(query);
+  const where: RuntimeValue = { [Op.and]: [hiddenPurposes] };
+  if (query.status === "archived") where.status = "archived";
+  else if (query.status !== "all") where.status = { [Op.ne]: "archived" };
+  if (query.kind === "image" || query.kind === "document")
+    where.kind = query.kind;
+  if (typeof query.search === "string" && query.search.trim())
+    where.originalName = { [Op.like]: likeContains(query.search.trim(), 100) };
+  const result: RuntimeValue = await MediaAsset.findAndCountAll({
+    where,
+    limit,
+    offset,
+    order: [["createdAt", "DESC"]],
+  });
+  return pageEnvelope(
+    { rows: result.rows.map(mediaDto), count: result.count },
+    page,
+    pageSize,
+  );
+}
+
 export async function updateMedia(
   id: string,
   payload: { altText?: string | null; privacy?: "public" | "private" },
@@ -235,6 +266,36 @@ export async function archiveMedia(
   });
 }
 
+/**
+ * Deletes several files at once. Each file is checked on its own, so files
+ * that are still in use are skipped and reported instead of failing the lot.
+ */
+export async function archiveManyMedia(
+  ids: string[],
+  actorId: string,
+  request: Request,
+) {
+  const archived: string[] = [];
+  const skipped: { id: string; name: string | null; reason: string }[] = [];
+  for (const id of [...new Set(ids)]) {
+    try {
+      await archiveMedia(id, actorId, request);
+      archived.push(id);
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      const asset: RuntimeValue = await MediaAsset.findByPk(id, {
+        attributes: ["originalName"],
+      });
+      skipped.push({
+        id,
+        name: asset?.originalName ?? null,
+        reason: error.code === "MEDIA_IN_USE" ? "in_use" : "not_found",
+      });
+    }
+  }
+  return { archived, skipped };
+}
+
 export async function mediaUsage(id: string) {
   const asset: RuntimeValue = await MediaAsset.findByPk(id);
   if (!asset) throw AppError.notFound("Media asset not found.");
@@ -249,6 +310,9 @@ export async function mediaUsage(id: string) {
     exports,
     reviewMedia,
     returnMedia,
+    homepage,
+    storeSettings,
+    theme,
   ]: RuntimeValue = await Promise.all([
     ProductMedia.count({ where: { mediaId: id } }),
     Category.count({ where: { imageId: id }, paranoid: false }),
@@ -266,6 +330,19 @@ export async function mediaUsage(id: string) {
       "SELECT COUNT(*) AS count FROM return_media WHERE mediaId = :id",
       { replacements: { id }, type: QueryTypes.SELECT },
     ),
+    // Homepage sections, the store logo and the theme keep the asset ID inside JSON.
+    sequelize.query(
+      "SELECT COUNT(*) AS count FROM homepage_sections WHERE deletedAt IS NULL AND JSON_SEARCH(config, 'one', :id) IS NOT NULL",
+      { replacements: { id }, type: QueryTypes.SELECT },
+    ),
+    sequelize.query(
+      "SELECT COUNT(*) AS count FROM store_settings WHERE JSON_SEARCH(value, 'one', :id) IS NOT NULL",
+      { replacements: { id }, type: QueryTypes.SELECT },
+    ),
+    sequelize.query(
+      "SELECT COUNT(*) AS count FROM theme_settings WHERE JSON_SEARCH(settings, 'one', :id) IS NOT NULL",
+      { replacements: { id }, type: QueryTypes.SELECT },
+    ),
   ]);
   const reviewCount = reviewMedia[0] as { count?: unknown } | undefined;
   const returnCount = returnMedia[0] as { count?: unknown } | undefined;
@@ -280,6 +357,9 @@ export async function mediaUsage(id: string) {
     exports,
     reviews: Number(reviewCount?.count || 0),
     returns: Number(returnCount?.count || 0),
+    homepage: Number((homepage[0] as { count?: unknown })?.count || 0),
+    settings: Number((storeSettings[0] as { count?: unknown })?.count || 0),
+    theme: Number((theme[0] as { count?: unknown })?.count || 0),
   };
   return {
     id,

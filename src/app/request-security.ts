@@ -128,6 +128,7 @@ const hourlyLimiter = (prefix: string, limit: number) => {
 const guestReturnLimiter = hourlyLimiter("guest-return", 20);
 const contactLimiter = hourlyLimiter("contact", 10);
 const manualPaymentLimiter = hourlyLimiter("manual-payment", 15);
+const trackingLimiter = hourlyLimiter("tracking", 1200);
 
 @Injectable()
 export class ContactRateLimitGuard implements CanActivate {
@@ -135,6 +136,20 @@ export class ContactRateLimitGuard implements CanActivate {
     const http = context.switchToHttp();
     return new Promise((resolve, reject) => {
       contactLimiter()(
+        http.getRequest(),
+        http.getResponse(),
+        (error?: unknown) => (error ? reject(error) : resolve(true)),
+      );
+    });
+  }
+}
+
+@Injectable()
+export class TrackingRateLimitGuard implements CanActivate {
+  canActivate(context: ExecutionContext): Promise<boolean> {
+    const http = context.switchToHttp();
+    return new Promise((resolve, reject) => {
+      trackingLimiter()(
         http.getRequest(),
         http.getResponse(),
         (error?: unknown) => (error ? reject(error) : resolve(true)),

@@ -12,6 +12,7 @@ import { InventoryModule } from "../modules/inventory/inventory.module.js";
 import { MediaModule } from "../modules/media/media.module.js";
 import { NotificationsModule } from "../modules/notifications/notifications.module.js";
 import { OrdersModule } from "../modules/orders/orders.module.js";
+import { TrackingModule } from "../modules/tracking/tracking.module.js";
 import { PaymentsModule } from "../modules/payments/payments.module.js";
 import { PromotionsModule } from "../modules/promotions/promotions.module.js";
 import { ReturnsModule } from "../modules/returns/returns.module.js";
@@ -36,6 +37,7 @@ import { WishlistModule } from "../modules/wishlist/wishlist.module.js";
     NotificationsModule,
     OrdersModule,
     PaymentsModule,
+    TrackingModule,
     PromotionsModule,
     ReturnsModule,
     ReviewsModule,

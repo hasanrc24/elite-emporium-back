@@ -465,6 +465,15 @@ export async function listProducts(query: RuntimeValue) {
       .slice(0, 24);
     where.slug = { [Op.in]: slugs.length ? slugs : ["-"] };
   }
+  if (typeof query.ids === "string" && query.ids) {
+    // Hand-picked homepage products: a bounded set of validated IDs.
+    const ids = query.ids
+      .split(",")
+      .map((id: string) => id.trim())
+      .filter((id: string) => /^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))
+      .slice(0, 48);
+    where.id = { [Op.in]: ids.length ? ids : ["-"] };
+  }
   let relevance: RuntimeValue = null;
   if (search) {
     const normalized = normalizeSearchTerm(search);

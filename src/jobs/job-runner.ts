@@ -45,6 +45,10 @@ import {
 } from "../modules/notifications/staff-notification.service.js";
 import { persistOriginal } from "../modules/media/media.storage.js";
 import { expireStaleManualPayments } from "../modules/payments/manual-payment.service.js";
+import {
+  processMetaCapiQueue,
+  purgeMetaCapiEvents,
+} from "../modules/tracking/meta-capi.service.js";
 import { cancelStaleUnconfirmedOrders } from "../modules/orders/confirmation.service.js";
 import {
   assertPublicHostname,
@@ -973,7 +977,8 @@ async function processRetentionCleanup() {
       { where: { status: "ready", expiresAt: { [Op.lt]: now } } },
     ),
   ]);
-  return { quotes, idempotencyKeys: keys, exports: exports[0] };
+  const metaEvents = await purgeMetaCapiEvents(now);
+  return { quotes, idempotencyKeys: keys, exports: exports[0], metaEvents };
 }
 
 let lastStaleRecovery = 0;
@@ -1014,6 +1019,7 @@ export async function runJobsOnce() {
     ["cleanup", () => processRetentionCleanup()],
     ["confirmations", () => sweepUnconfirmedOrders()],
     ["inbox", () => purgeStaffInbox()],
+    ["meta-capi", () => processMetaCapiQueue()],
   ];
   // One failing job family must not discard the others' results.
   const results = await Promise.allSettled(jobs.map(([, run]) => run()));

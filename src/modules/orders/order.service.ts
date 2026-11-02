@@ -36,6 +36,7 @@ import { calculatePromotions } from "../promotions/promotion.service.js";
 import { resolveLocation } from "../shipping/location.service.js";
 import { resolveShippingMethod } from "../shipping/shipping.service.js";
 import { issueConfirmationLink } from "./confirmation.service.js";
+import { queuePurchaseEvent } from "../tracking/meta-capi.service.js";
 import { assessOrderRisk, enforceRiskPolicy } from "./risk.service.js";
 
 const orderInclude: RuntimeValue = [
@@ -137,6 +138,21 @@ function normalizeCheckoutPayload(payload: RuntimeValue) {
     locale: payload.locale,
     note: payload.note?.trim() || null,
     attribution: normalizeAttribution(payload.attribution),
+    tracking: normalizeTracking(payload.tracking),
+  };
+}
+
+/** Browser pixel context for the Conversions API (consent, fbp/fbc cookies). */
+function normalizeTracking(input: RuntimeValue) {
+  if (!input || typeof input !== "object") return null;
+  return {
+    consent: input.consent === true,
+    fbp: typeof input.fbp === "string" ? input.fbp.slice(0, 100) : null,
+    fbc: typeof input.fbc === "string" ? input.fbc.slice(0, 400) : null,
+    sourceUrl:
+      typeof input.sourceUrl === "string"
+        ? input.sourceUrl.slice(0, 1000)
+        : null,
   };
 }
 
@@ -864,6 +880,22 @@ export async function createLocalOrderFromQuote({
   await cart.save({ transaction });
   checkoutQuote.consumedAt = new Date();
   await checkoutQuote.save({ transaction });
+  await queuePurchaseEvent({
+    order,
+    lines: calculation.lines.map((line: RuntimeValue) => ({
+      productId: String(
+        line.productId || line.product?.id || line.variant.productId,
+      ),
+      quantity: Number(line.quantity),
+      unitPrice: moneyString(line.unitPrice),
+    })),
+    tracking: checkoutQuote.payload.tracking,
+    address: checkoutQuote.payload.address,
+    userId,
+    request,
+    held: pendingPayment,
+    transaction,
+  });
   if (!pendingPayment && needsConfirmation)
     await issueConfirmationLink(order, transaction);
   if (!pendingPayment) {

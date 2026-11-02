@@ -20,6 +20,7 @@ import { validateOutboundUrl } from "../../lib/safe-url.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
 import { notifyStaff } from "../notifications/staff-notification.service.js";
+import { releasePurchaseEvent } from "../tracking/meta-capi.service.js";
 import {
   createLocalOrderFromQuote,
   releaseOrderReservations,
@@ -529,6 +530,7 @@ async function finalizeSuccess(
       },
       transaction,
     });
+    await releasePurchaseEvent(order.reference, transaction);
     await queueNotification({
       event: "payment.paid",
       channel: order.customerEmail ? "email" : "sms",

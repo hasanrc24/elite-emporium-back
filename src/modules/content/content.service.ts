@@ -1,3 +1,4 @@
+import { env } from "../../config/env.js";
 import sanitizeHtml from "sanitize-html";
 import { Op } from "sequelize";
 import {
@@ -63,7 +64,16 @@ function validateUrl(value: RuntimeValue) {
       "Content contains an invalid URL.",
     );
   }
-  if (url.protocol !== "https:" || url.username || url.password)
+  // Production media is always HTTPS (env validation); in development the
+  // local media origin is plain http.
+  const localMedia =
+    env.NODE_ENV !== "production" &&
+    url.origin === new URL(env.MEDIA_PUBLIC_ORIGIN).origin;
+  if (
+    (url.protocol !== "https:" && !localMedia) ||
+    url.username ||
+    url.password
+  )
     throw AppError.unprocessable(
       "UNSAFE_CONTENT_URL",
       "Content URLs must use HTTPS and contain no credentials.",
@@ -745,6 +755,29 @@ export async function saveHomeSection(
       transaction,
     });
     return { ...values, id: row.id, version: Number(row.version) };
+  });
+}
+
+export async function archiveHomeSection(
+  id: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const row: RuntimeValue = await HomepageSection.findByPk(id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!row) throw AppError.notFound("Homepage section not found.");
+    await row.destroy({ transaction });
+    await recordAudit({
+      actorId,
+      action: "cms.home_section_archive",
+      resourceType: "homepage_section",
+      resourceId: id,
+      request,
+      transaction,
+    });
   });
 }
 

@@ -31,11 +31,14 @@ const zoneSchema = z.object({
   active: z.boolean().default(true),
 });
 const methodSchema = z.object({
-  zoneId: z.string().length(26),
+  // Optional: a new method without a zone gets its own zone, and its code is
+  // generated; an update keeps the zone and code it already has.
+  zoneId: z.string().length(26).optional(),
   code: z
     .string()
     .regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/)
-    .max(60),
+    .max(60)
+    .optional(),
   type: z.enum(["flat_rate", "free", "courier"]).default("flat_rate"),
   labelEn: z.string().trim().min(1).max(160),
   labelBn: z.string().trim().min(1).max(160),
