@@ -61,7 +61,14 @@ initializeModel(
     renderedSubject: DataTypes.STRING(255),
     renderedBody: DataTypes.TEXT("long"),
     status: {
-      type: DataTypes.ENUM("pending", "processing", "sent", "retry", "dead"),
+      type: DataTypes.ENUM(
+        "pending",
+        "processing",
+        "sent",
+        "retry",
+        "dead",
+        "skipped",
+      ),
       allowNull: false,
       defaultValue: "pending",
     },
@@ -77,6 +84,36 @@ initializeModel(
     lastError: DataTypes.STRING(500),
   },
   { modelName: "NotificationOutbox", tableName: "notification_outbox" },
+);
+/** @type {any} */
+export class StaffNotification extends DynamicModel {}
+initializeModel(
+  StaffNotification,
+  {
+    id: primaryId(),
+    userId: { type: DataTypes.CHAR(26), allowNull: false },
+    outboxId: DataTypes.CHAR(26),
+    event: { type: DataTypes.STRING(100), allowNull: false },
+    category: { type: DataTypes.STRING(40), allowNull: false },
+    severity: {
+      type: DataTypes.ENUM("info", "success", "warning", "critical"),
+      allowNull: false,
+      defaultValue: "info",
+    },
+    permission: DataTypes.STRING(100),
+    title: { type: DataTypes.STRING(255), allowNull: false },
+    body: DataTypes.TEXT,
+    link: DataTypes.STRING(500),
+    dedupeKey: DataTypes.STRING(190),
+    occurrences: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 1,
+    },
+    occurredAt: { type: DataTypes.DATE, allowNull: false },
+    readAt: DataTypes.DATE,
+  },
+  { modelName: "StaffNotification", tableName: "staff_notifications" },
 );
 /** @type {any} */
 export class OutboxEvent extends DynamicModel {}

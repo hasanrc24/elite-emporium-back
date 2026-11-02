@@ -3,6 +3,7 @@ import * as catalog from "./models/catalog.models.js";
 import * as commerce from "./models/commerce.models.js";
 import * as content from "./models/content.models.js";
 import * as platform from "./models/platform.models.js";
+import * as operations from "./models/operations.models.js";
 
 export const {
   User,
@@ -99,6 +100,7 @@ export const {
   AuditLog,
   NotificationTemplate,
   NotificationOutbox,
+  StaffNotification,
   OutboxEvent,
   IntegrationCredential,
   Webhook,
@@ -106,6 +108,14 @@ export const {
   ContactMessage,
   ExportJob,
 } = /** @type {any} */ platform;
+export const {
+  OrderConfirmation,
+  ManualPaymentClaim,
+  RiskBlocklist,
+  BdLocation,
+  SearchSynonym,
+  SearchMiss,
+} = /** @type {any} */ operations;
 
 User.belongsToMany(Role, {
   through: "user_roles",
@@ -496,6 +506,10 @@ ReturnRequest.belongsTo(Order, {
 ReturnRequest.hasMany(ReturnItem, { as: "items", foreignKey: "returnId" });
 ReturnItem.belongsTo(ReturnRequest, { as: "return", foreignKey: "returnId" });
 ReturnItem.belongsTo(OrderItem, { as: "orderItem", foreignKey: "orderItemId" });
+ReturnItem.belongsTo(ProductVariant, {
+  as: "requestedVariant",
+  foreignKey: "requestedVariantId",
+});
 ReturnRequest.hasMany(ReturnEvent, { as: "events", foreignKey: "returnId" });
 ReturnEvent.belongsTo(ReturnRequest, { as: "return", foreignKey: "returnId" });
 ReturnEvent.belongsTo(User, { as: "actor", foreignKey: "actorId" });
@@ -541,6 +555,7 @@ NotificationOutbox.belongsTo(NotificationTemplate, {
   as: "template",
   foreignKey: "templateId",
 });
+StaffNotification.belongsTo(User, { as: "user", foreignKey: "userId" });
 IntegrationCredential.belongsTo(User, {
   as: "updatedByUser",
   foreignKey: "updatedBy",
@@ -550,3 +565,32 @@ WebhookDelivery.belongsTo(Webhook, { as: "webhook", foreignKey: "webhookId" });
 WebhookDelivery.belongsTo(OutboxEvent, { as: "event", foreignKey: "eventId" });
 ExportJob.belongsTo(User, { as: "requester", foreignKey: "requestedBy" });
 ExportJob.belongsTo(MediaAsset, { as: "file", foreignKey: "mediaId" });
+
+Order.hasMany(OrderConfirmation, {
+  as: "confirmations",
+  foreignKey: "orderId",
+});
+OrderConfirmation.belongsTo(Order, { as: "order", foreignKey: "orderId" });
+OrderConfirmation.belongsTo(User, { as: "actor", foreignKey: "actorId" });
+RiskBlocklist.belongsTo(User, { as: "actor", foreignKey: "actorId" });
+Order.hasMany(ManualPaymentClaim, {
+  as: "manualPayments",
+  foreignKey: "orderId",
+});
+ManualPaymentClaim.belongsTo(Order, { as: "order", foreignKey: "orderId" });
+ManualPaymentClaim.belongsTo(Payment, {
+  as: "payment",
+  foreignKey: "paymentId",
+});
+ManualPaymentClaim.belongsTo(User, {
+  as: "reviewer",
+  foreignKey: "reviewedBy",
+});
+// Reservations must carry their order/cart IDs: packing consumes and
+// cancellation releases stock by `orderId`.
+InventoryReservation.belongsTo(Order, { as: "order", foreignKey: "orderId" });
+Order.hasMany(InventoryReservation, {
+  as: "reservations",
+  foreignKey: "orderId",
+});
+InventoryReservation.belongsTo(Cart, { as: "cart", foreignKey: "cartId" });

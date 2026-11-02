@@ -26,7 +26,7 @@ export class AdminReturnController {
   ) {}
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.view")
+  @Permissions("returns.view")
   @Get("/returns")
   route0(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
@@ -38,7 +38,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.view")
+  @Permissions("returns.view")
   @Get("/returns/:id")
   route1(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
@@ -51,7 +51,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -77,7 +77,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -103,7 +103,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -129,7 +129,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -156,7 +156,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -182,7 +182,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -234,7 +234,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @Permissions("payments.refund")
   @ValidateRequest(
     z.object({
@@ -261,7 +261,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       version,
@@ -294,7 +294,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({ version, message: z.string().trim().max(500).optional() }),
   )
@@ -318,7 +318,7 @@ export class AdminReturnController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminReturns.manage")
+  @Permissions("returns.manage")
   @ValidateRequest(
     z.object({
       type: z.string().trim().min(1).max(100),

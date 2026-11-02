@@ -10,6 +10,7 @@ import {
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
 import { recordAudit } from "../audits/audit.service.js";
+import { assertPublicHostname, postToPublicUrl } from "./outbound.js";
 import {
   BkashProviderError,
   testBkashConnection,
@@ -123,18 +124,6 @@ export async function configureMessaging(
   });
 }
 
-function blockedHost(hostname: RuntimeValue) {
-  const host: RuntimeValue = hostname.toLowerCase();
-  return (
-    host === "localhost" ||
-    host.endsWith(".local") ||
-    /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
-      host,
-    ) ||
-    host === "::1"
-  );
-}
-
 export async function testMessaging(
   provider: RuntimeValue,
   payload: RuntimeValue,
@@ -152,11 +141,9 @@ export async function testMessaging(
   const config: RuntimeValue = decryptSecret(row.encryptedPayload);
   try {
     if (provider === "smtp") {
-      if (blockedHost(config.host))
-        throw AppError.unprocessable(
-          "UNSAFE_INTEGRATION_HOST",
-          "Private and local SMTP hosts are not allowed.",
-        );
+      // Resolve the host: names such as "mysql" or "redis" are internal
+      // services even though they do not look like private addresses.
+      await assertPublicHostname(String(config.host || ""));
       const transport: RuntimeValue = nodemailer.createTransport({
         host: config.host,
         port: Number(config.port),
@@ -169,22 +156,11 @@ export async function testMessaging(
       });
       await transport.verify();
     } else {
-      const url = new URL(config.url);
-      if (
-        url.protocol !== "https:" ||
-        url.username ||
-        url.password ||
-        blockedHost(url.hostname)
-      )
-        throw AppError.unprocessable(
-          "UNSAFE_INTEGRATION_URL",
-          "SMS provider URL must be a public HTTPS endpoint.",
-        );
-      const response: RuntimeValue = await fetch(url, {
-        method: "POST",
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-        headers: {
+      // Pins the connection to the validated address (no DNS rebinding) and
+      // never follows redirects.
+      const response: RuntimeValue = await postToPublicUrl(
+        config.url,
+        {
           "content-type": "application/json",
           ...(config.token
             ? {
@@ -194,11 +170,11 @@ export async function testMessaging(
               }
             : {}),
         },
-        body: JSON.stringify({
+        JSON.stringify({
           [config.recipientField]: payload.testRecipient,
           [config.messageField]: "Elite Emporium integration test",
         }),
-      });
+      );
       if (!response.ok)
         throw new AppError(
           422,
@@ -238,6 +214,14 @@ export async function testMessaging(
       transaction: null,
     });
     if (error instanceof AppError) throw error;
+    if (
+      error.code === "UNSAFE_INTEGRATION_HOST" ||
+      error.code === "UNSAFE_INTEGRATION_URL"
+    )
+      throw AppError.unprocessable(
+        error.code,
+        "The integration host must be a public HTTPS endpoint.",
+      );
     throw new AppError(
       422,
       "INTEGRATION_TEST_FAILED",

@@ -36,6 +36,7 @@ const createReturnSchema = z
           orderItemId: z.string().length(26),
           quantity: z.number().int().min(1).max(999),
           reason: z.string().trim().min(3).max(255).optional(),
+          requestedVariantId: z.string().length(26).optional(),
         }),
       )
       .min(1)

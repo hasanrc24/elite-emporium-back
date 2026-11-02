@@ -101,21 +101,42 @@ export async function createNestApplication(): Promise<NestExpressApplication> {
   });
 
   const api = env.API_BASE_PATH;
-  app.use(`${api}/auth`, limiter("auth", 30));
-  app.use(`${api}/checkout`, limiter("checkout", 30));
+  // Limiters are built once: constructing them per request resets memory-store
+  // counters every time and re-registers Redis scripts on each call.
+  const credentialLimiter = limiter("auth", 30);
+  // Refresh runs on every full page load and before each access-token expiry,
+  // so session upkeep gets a separate, larger budget than credential checks.
+  const sessionLimiter = limiter("auth-session", 300);
+  const sessionPaths = new Set([
+    "/refresh",
+    "/me",
+    "/sessions",
+    "/logout",
+    "/logout-all",
+  ]);
+  app.use(`${api}/auth`, (req: Request, res: Response, next: NextFunction) =>
+    sessionPaths.has(req.path) || req.path.startsWith("/sessions/")
+      ? sessionLimiter(req, res, next)
+      : credentialLimiter(req, res, next),
+  );
+  // Checkout re-quotes as the shopper edits delivery/payment fields.
+  app.use(`${api}/checkout`, limiter("checkout", 120));
+  const orderCreateLimiter = limiter("order-create", 20);
   app.use(`${api}/orders`, (req: Request, res: Response, next: NextFunction) =>
     req.method === "POST" && req.path === "/"
-      ? limiter("order-create", 20)(req, res, next)
+      ? orderCreateLimiter(req, res, next)
       : next(),
   );
   app.use(`${api}/orders/track`, limiter("order-track", 20));
+  app.use(`${api}/orders/confirmation`, limiter("order-confirm", 20));
   app.use(`${api}/payments/bkash/create`, limiter("payment-create", 20));
   app.use(`${api}/payments/bkash/recover`, limiter("payment-recover", 200));
   app.use(`${api}/payments/bkash/callback`, limiter("payment-callback", 100));
+  const reviewLimiter = limiter("review", 20);
   app.use(
     `${api}/reviews`,
     (req: Request, res: Response, next: NextFunction) =>
-      req.method === "POST" ? limiter("review", 20)(req, res, next) : next(),
+      req.method === "POST" ? reviewLimiter(req, res, next) : next(),
   );
   app.use(
     `${api}/docs`,

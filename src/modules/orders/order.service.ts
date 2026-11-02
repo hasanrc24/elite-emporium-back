@@ -27,8 +27,16 @@ import { recordAudit } from "../audits/audit.service.js";
 import { loadCart } from "../cart/cart.service.js";
 import { effectivePrice, isSaleActive } from "../catalog/pricing.js";
 import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { crossedLowStock } from "../notifications/staff-notification.rules.js";
+import {
+  notifyStaff,
+  queueLowStockAlert,
+} from "../notifications/staff-notification.service.js";
 import { calculatePromotions } from "../promotions/promotion.service.js";
+import { resolveLocation } from "../shipping/location.service.js";
 import { resolveShippingMethod } from "../shipping/shipping.service.js";
+import { issueConfirmationLink } from "./confirmation.service.js";
+import { assessOrderRisk, enforceRiskPolicy } from "./risk.service.js";
 
 const orderInclude: RuntimeValue = [
   {
@@ -54,6 +62,42 @@ function availableQuantity(variant: RuntimeValue) {
       total + Math.max(0, Number(level.onHand) - Number(level.reserved)),
     0,
   );
+}
+
+/** Keeps only short, safe marketing parameters captured by the storefront. */
+function normalizeAttribution(input: RuntimeValue) {
+  if (!input || typeof input !== "object") return null;
+  const allowed = [
+    "utmSource",
+    "utmMedium",
+    "utmCampaign",
+    "utmContent",
+    "utmTerm",
+    "fbclid",
+    "gclid",
+    "landingPath",
+  ];
+  const entries = allowed
+    .map((key) => [key, input[key]])
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .map(([key, value]) => [key, String(value).trim().slice(0, 200)]);
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+/** Fills division/district/thana names from the selected location code. */
+async function withResolvedLocation(address: RuntimeValue) {
+  if (!address?.locationCode) return { address, location: null };
+  const location = await resolveLocation(address.locationCode);
+  return {
+    location,
+    address: {
+      ...address,
+      locationCode: location.code,
+      thana: location.thana?.nameEn || address.thana || null,
+      district: location.district?.nameEn || address.district || null,
+      division: location.division?.nameEn || address.division || null,
+    },
+  };
 }
 
 function normalizeCheckoutPayload(payload: RuntimeValue) {
@@ -92,6 +136,7 @@ function normalizeCheckoutPayload(payload: RuntimeValue) {
     paymentMethod: payload.paymentMethod,
     locale: payload.locale,
     note: payload.note?.trim() || null,
+    attribution: normalizeAttribution(payload.attribution),
   };
 }
 
@@ -209,9 +254,14 @@ async function calculateCart(
   };
 }
 
-function quoteDto(quote: RuntimeValue, calculation: RuntimeValue) {
+function quoteDto(
+  quote: RuntimeValue,
+  calculation: RuntimeValue,
+  location: RuntimeValue = null,
+) {
   return {
     quoteId: quote.id,
+    suggestedDeliveryCode: location?.suggestedDeliveryCode || null,
     expiresAt: quote.expiresAt,
     customer: quote.payload.customer,
     address: quote.payload.address,
@@ -253,8 +303,11 @@ export async function quote(
   cartId: RuntimeValue,
   userId: RuntimeValue,
   input: RuntimeValue,
+  request: RuntimeValue = null,
 ) {
-  const payload: RuntimeValue = normalizeCheckoutPayload(input);
+  const normalized: RuntimeValue = normalizeCheckoutPayload(input);
+  const { address, location } = await withResolvedLocation(normalized.address);
+  const payload: RuntimeValue = { ...normalized, address };
   await assertPaymentAvailable(payload.paymentMethod);
   const cart: RuntimeValue = await loadCart(cartId);
   if (!cart || cart.status !== "active")
@@ -268,6 +321,19 @@ export async function quote(
     userId,
     null,
     true,
+  );
+  // Surface blocked/COD-restricted outcomes before the customer submits.
+  enforceRiskPolicy(
+    await assessOrderRisk({
+      phone: payload.customer.phone,
+      email: payload.customer.email,
+      ip: request?.ip,
+      grandTotal: calculation.grandTotal,
+      variantIds: calculation.lines.map(
+        (line: RuntimeValue) => line.variant.id,
+      ),
+    }),
+    payload.paymentMethod,
   );
   const expiresAt = new Date(Date.now() + 10 * 60000);
   const storedPayload: RuntimeValue = {
@@ -298,7 +364,7 @@ export async function quote(
     totals,
     expiresAt,
   });
-  return quoteDto(row, calculation);
+  return quoteDto(row, calculation, location);
 }
 
 function addressText(address: RuntimeValue) {
@@ -331,6 +397,20 @@ export function orderDto(
     paymentStatus: order.paymentStatus,
     fulfillmentStatus: order.fulfillmentStatus,
     paymentMethod: order.paymentMethod,
+    confirmationStatus: order.confirmationStatus,
+    ...(includeInternal
+      ? {
+          channel: order.channel,
+          confirmationAttempts: order.confirmationAttempts,
+          confirmedAt: order.confirmedAt,
+          riskLevel: order.riskLevel,
+          riskScore: order.riskScore,
+          riskSignals: order.riskSignals || [],
+          duplicateOfOrderId: order.duplicateOfOrderId,
+          tags: order.tags || [],
+          attribution: order.attribution || null,
+        }
+      : {}),
     customer: {
       name: order.customerName,
       phone: order.customerPhone,
@@ -346,6 +426,8 @@ export function orderDto(
           division: shipping.division,
           postcode: shipping.postcode,
           landmark: shipping.landmark,
+          thana: shipping.thana,
+          locationCode: shipping.locationCode,
         }
       : order.address,
     delivery: {
@@ -477,6 +559,20 @@ async function reserveInventory(
       level.reserved = beforeReserved + quantity;
       level.version += 1;
       await level.save({ transaction });
+      if (
+        crossedLowStock(
+          available,
+          available - quantity,
+          Number(level.lowStockThreshold),
+        )
+      )
+        await queueLowStockAlert({
+          variantId: line.variant.id,
+          sku: line.variant.sku,
+          available: available - quantity,
+          threshold: Number(level.lowStockThreshold),
+          transaction,
+        });
       await InventoryReservation.create(
         {
           id: newId(),
@@ -604,6 +700,23 @@ export async function createLocalOrderFromQuote({
       "Price, stock, delivery, or discount changed. Review a new quote before placing the order.",
     );
   const pendingPayment = paymentMethod === "bkash";
+  const risk: RuntimeValue = await assessOrderRisk(
+    {
+      phone: checkoutQuote.payload.customer.phone,
+      email: checkoutQuote.payload.customer.email,
+      ip: request?.ip,
+      grandTotal: calculation.grandTotal,
+      variantIds: calculation.lines.map(
+        (line: RuntimeValue) => line.variant.id,
+      ),
+    },
+    transaction,
+  );
+  enforceRiskPolicy(risk, paymentMethod);
+  // COD orders are confirmed by phone/link before packing; prepaid orders
+  // only when risk is high (BE-RISK-001).
+  const needsConfirmation =
+    risk.confirmationEnabled && (!pendingPayment || risk.level === "high");
   const order: RuntimeValue = await Order.create(
     {
       id: newId(),
@@ -630,6 +743,13 @@ export async function createLocalOrderFromQuote({
       note: checkoutQuote.payload.note,
       placedAt: pendingPayment ? null : new Date(),
       metadata: { cartId, quoteId: checkoutQuote.id },
+      channel: "web",
+      attribution: checkoutQuote.payload.attribution || null,
+      confirmationStatus: needsConfirmation ? "pending" : "not_required",
+      riskLevel: risk.level,
+      riskScore: risk.score,
+      riskSignals: risk.signals,
+      duplicateOfOrderId: risk.duplicateOfOrderId,
       version: 1,
     },
     { transaction },
@@ -680,6 +800,8 @@ export async function createLocalOrderFromQuote({
         division: value.division || null,
         postcode: value.postcode || null,
         landmark: value.landmark || null,
+        thana: value.thana || null,
+        locationCode: value.locationCode || null,
         deliveryCode: calculation.shipping.code,
         snapshot: value,
       },
@@ -742,6 +864,8 @@ export async function createLocalOrderFromQuote({
   await cart.save({ transaction });
   checkoutQuote.consumedAt = new Date();
   await checkoutQuote.save({ transaction });
+  if (!pendingPayment && needsConfirmation)
+    await issueConfirmationLink(order, transaction);
   if (!pendingPayment) {
     await addDomainEvent({
       topic: "order.placed",
@@ -765,6 +889,21 @@ export async function createLocalOrderFromQuote({
         message: `Order ${order.reference} was placed successfully.`,
         orderReference: order.reference,
       },
+      transaction,
+    });
+    await notifyStaff("orders", {
+      event: "order.placed",
+      title: `New order ${order.reference}`,
+      message: [
+        `${order.customerName} · ৳${moneyString(order.grandTotal)} · ${paymentMethod === "cod" ? "Cash on delivery" : "bKash"}.`,
+        needsConfirmation ? "Needs confirmation." : null,
+        ["high", "blocked"].includes(risk.level) ? "High COD risk." : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      link: `/admin/orders/${order.id}`,
+      severity: risk.level === "high" ? "warning" : "info",
+      data: { orderId: order.id, orderReference: order.reference },
       transaction,
     });
   }
@@ -802,7 +941,13 @@ export async function createOrder(
       "IDEMPOTENCY_KEY_REQUIRED",
       "Idempotency-Key header is required.",
     );
-  const actorKey = userId || cartId;
+  // A guest's cart is converted (and the cookie re-issued) once the order is
+  // placed, so a retry after a lost response arrives with a new cart. Scope the
+  // key to the cart that owns the quote so the retry replays the first result.
+  const quoteOwner: RuntimeValue = userId
+    ? null
+    : await CheckoutQuote.findByPk(payload.quoteId, { attributes: ["cartId"] });
+  const actorKey = userId || quoteOwner?.cartId || cartId;
   const requestHash: RuntimeValue = sha256(canonicalJson(payload));
   return sequelize.transaction(async (transaction: RuntimeValue) => {
     const [record]: RuntimeValue = await IdempotencyRecord.findOrCreate({
@@ -953,14 +1098,10 @@ export async function getOrder(id: RuntimeValue, userId: RuntimeValue) {
   return orderDto(order);
 }
 
-export async function trackOrder(
-  reference: RuntimeValue,
-  phoneInput: RuntimeValue,
-) {
-  const phone: RuntimeValue = normalizePhone(phoneInput);
-  if (!phone) throw AppError.notFound("Order not found.");
+/** Public lookup by reference alone; the result carries no personal data. */
+export async function trackOrder(reference: RuntimeValue) {
   const order: RuntimeValue = await Order.findOne({
-    where: { reference, customerPhone: phone },
+    where: { reference: String(reference).trim().toUpperCase() },
     include: [
       {
         model: OrderItem,
@@ -1019,6 +1160,7 @@ export async function cancelOrder(
         "PAID_ORDER_REQUIRES_SUPPORT",
         "Contact support to cancel a paid order and arrange a refund.",
       );
+    const previousStatus = order.orderStatus;
     await releaseOrderReservations(
       order.id,
       "order_cancelled",
@@ -1046,7 +1188,7 @@ export async function cancelOrder(
         orderId: order.id,
         actorId: userId,
         type: "order_cancelled",
-        fromStatus: "placed",
+        fromStatus: previousStatus,
         toStatus: "cancelled",
         message: "Order cancelled.",
         public: true,
@@ -1060,12 +1202,21 @@ export async function cancelOrder(
       payload: { orderId: order.id, reference: order.reference, reason },
       transaction,
     });
+    await notifyStaff("orders", {
+      event: "order.cancelled",
+      title: `Order ${order.reference} cancelled by the customer`,
+      message: reason ? `Reason: ${String(reason).slice(0, 300)}` : null,
+      link: `/admin/orders/${order.id}`,
+      severity: "warning",
+      data: { orderId: order.id, orderReference: order.reference },
+      transaction,
+    });
     await recordAudit({
       actorId: userId,
       action: "order.cancel",
       resourceType: "order",
       resourceId: order.id,
-      before: { orderStatus: "placed" },
+      before: { orderStatus: previousStatus },
       after: { orderStatus: "cancelled", reason },
       request,
       transaction,

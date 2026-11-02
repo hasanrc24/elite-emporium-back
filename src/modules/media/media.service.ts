@@ -17,9 +17,11 @@ import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
 import { recordAudit } from "../audits/audit.service.js";
 import {
+  discardMedia,
   mediaPublicUrl,
   persistOriginal,
   processImage,
+  stripImageMetadata,
 } from "./media.storage.js";
 import type { Request } from "express";
 import type { DynamicModel } from "../../db/models/shared.js";
@@ -59,6 +61,7 @@ export async function uploadMedia({
   request,
   purpose = "library",
   metadata = {},
+  allowDocuments = true,
 }: {
   file?: Express.Multer.File;
   privacy: "public" | "private";
@@ -67,6 +70,7 @@ export async function uploadMedia({
   request?: Request | null;
   purpose?: string;
   metadata?: Record<string, unknown>;
+  allowDocuments?: boolean;
 }) {
   if (!file?.buffer?.length)
     throw AppError.unprocessable("FILE_REQUIRED", "Choose a file to upload.", {
@@ -75,11 +79,14 @@ export async function uploadMedia({
   const detected: RuntimeValue = await fileTypeFromBuffer(file.buffer);
   const extension =
     detected &&
-    (imageTypes.get(detected.mime) || documentTypes.get(detected.mime));
+    (imageTypes.get(detected.mime) ||
+      (allowDocuments ? documentTypes.get(detected.mime) : undefined));
   if (!detected || !extension)
     throw AppError.unprocessable(
       "UNSUPPORTED_MEDIA_TYPE",
-      "Only JPEG, PNG, WebP, AVIF, and PDF files are allowed.",
+      allowDocuments
+        ? "Only JPEG, PNG, WebP, AVIF, and PDF files are allowed."
+        : "Only JPEG, PNG, WebP, and AVIF images are allowed.",
     );
   const kind = imageTypes.has(detected.mime) ? "image" : "document";
   const maximumBytes =
@@ -89,64 +96,75 @@ export async function uploadMedia({
       "MEDIA_TOO_LARGE",
       `The selected ${kind} exceeds the allowed upload size.`,
     );
+  let content = file.buffer;
+  if (kind === "image") {
+    try {
+      content = await stripImageMetadata(file.buffer, detected.mime);
+    } catch {
+      throw AppError.unprocessable(
+        "MEDIA_PROCESSING_FAILED",
+        "The uploaded image could not be processed safely.",
+      );
+    }
+  }
   const { storageKey, checksum }: RuntimeValue = await persistOriginal({
-    buffer: file.buffer,
+    buffer: content,
     privacy,
     extension,
   });
-  return sequelize.transaction(async (transaction: RuntimeValue) => {
-    const asset: RuntimeValue = await MediaAsset.create(
-      {
-        id: newId(),
-        uploaderId: actorId,
-        storageKey,
-        originalName: file.originalname.slice(0, 255),
-        kind,
-        mimeType: detected.mime,
-        byteSize: file.buffer.length,
-        checksum,
-        privacy,
-        status: kind === "image" ? "processing" : "ready",
-        altText: altText || null,
-        metadata: { ...metadata, purpose },
-      },
-      { transaction },
-    );
+  try {
+    // Decode before opening the transaction; a failed upload leaves neither a
+    // row nor orphaned files behind.
+    let processed: RuntimeValue = null;
     if (kind === "image") {
       try {
-        const processed: RuntimeValue = await processImage(storageKey);
-        asset.width = processed.width;
-        asset.height = processed.height;
-        asset.metadata = { ...asset.metadata, variants: processed.variants };
-        asset.status = "ready";
-        await asset.save({ transaction });
-      } catch (error: RuntimeValue) {
-        asset.status = "failed";
-        asset.metadata = {
-          ...asset.metadata,
-          processingError:
-            error instanceof Error
-              ? error.message.slice(0, 200)
-              : "processing_failed",
-        };
-        await asset.save({ transaction });
+        processed = await processImage(storageKey);
+      } catch {
         throw AppError.unprocessable(
           "MEDIA_PROCESSING_FAILED",
           "The uploaded image could not be processed safely.",
         );
       }
     }
-    await recordAudit({
-      actorId,
-      action: "media.upload",
-      resourceType: "media",
-      resourceId: asset.id,
-      after: mediaDto(asset),
-      request,
-      transaction,
+    return await sequelize.transaction(async (transaction: RuntimeValue) => {
+      const asset: RuntimeValue = await MediaAsset.create(
+        {
+          id: newId(),
+          uploaderId: actorId,
+          storageKey,
+          originalName: file.originalname.slice(0, 255),
+          kind,
+          mimeType: detected.mime,
+          byteSize: content.length,
+          checksum,
+          privacy,
+          status: "ready",
+          width: processed?.width ?? null,
+          height: processed?.height ?? null,
+          altText: altText || null,
+          metadata: {
+            ...metadata,
+            purpose,
+            ...(processed ? { variants: processed.variants } : {}),
+          },
+        },
+        { transaction },
+      );
+      await recordAudit({
+        actorId,
+        action: "media.upload",
+        resourceType: "media",
+        resourceId: asset.id,
+        after: mediaDto(asset),
+        request,
+        transaction,
+      });
+      return mediaDto(asset);
     });
-    return mediaDto(asset);
-  });
+  } catch (error) {
+    await discardMedia(storageKey).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function updateMedia(

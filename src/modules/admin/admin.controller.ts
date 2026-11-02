@@ -14,7 +14,14 @@ import {
   ReturnRequest,
   User,
 } from "../../db/models.js";
-import { moneyString } from "../../lib/money.js";
+import { money, moneyString } from "../../lib/money.js";
+
+const openConfirmation = ["pending", "no_answer", "call_back", "wrong_number"];
+
+/** Share of `part` in `whole` as a percentage with one decimal, or null. */
+function percentage(part: number, whole: number) {
+  return whole > 0 ? Math.round((part / whole) * 1000) / 10 : null;
+}
 
 function dashboardRange(query: Request["query"]) {
   const now = new Date();
@@ -67,6 +74,13 @@ export class AdminController {
         orderTrend,
         orderStatuses,
         topProducts,
+        toConfirm,
+        toPack,
+        toShip,
+        inTransit,
+        fulfillmentOutcomes,
+        confirmationOutcomes,
+        channels,
       ] = await Promise.all([
         Order.count({ where: createdInRange }),
         Product.count({ where: { status: "published" } }),
@@ -136,7 +150,73 @@ export class AdminController {
           limit: 5,
           raw: true,
         }),
+        Order.count({
+          where: {
+            orderStatus: "placed",
+            confirmationStatus: { [Op.in]: openConfirmation },
+          },
+        }),
+        Order.count({
+          where: {
+            orderStatus: { [Op.in]: ["placed", "confirmed", "processing"] },
+            fulfillmentStatus: { [Op.in]: ["unfulfilled", "processing"] },
+            confirmationStatus: { [Op.in]: ["confirmed", "not_required"] },
+          },
+        }),
+        Order.count({ where: { fulfillmentStatus: "packed" } }),
+        Order.count({
+          where: {
+            fulfillmentStatus: { [Op.in]: ["shipped", "out_for_delivery"] },
+          },
+        }),
+        Order.findAll({
+          attributes: ["fulfillmentStatus", [fn("COUNT", col("id")), "count"]],
+          where: {
+            ...createdInRange,
+            fulfillmentStatus: {
+              [Op.in]: [
+                "delivered",
+                "partially_returned",
+                "returned",
+                "returned_to_origin",
+              ],
+            },
+          },
+          group: ["fulfillmentStatus"],
+          raw: true,
+        }),
+        Order.findAll({
+          attributes: ["confirmationStatus", [fn("COUNT", col("id")), "count"]],
+          where: {
+            ...createdInRange,
+            confirmationStatus: { [Op.ne]: "not_required" },
+          },
+          group: ["confirmationStatus"],
+          raw: true,
+        }),
+        Order.findAll({
+          attributes: ["channel", [fn("COUNT", col("id")), "count"]],
+          where: createdInRange,
+          group: ["channel"],
+          raw: true,
+        }),
       ]);
+      const countOf = (rows: RuntimeValue[], key: string, value: string) =>
+        Number(rows.find((row) => row[key] === value)?.count || 0);
+      const returnedToOrigin = countOf(
+        fulfillmentOutcomes,
+        "fulfillmentStatus",
+        "returned_to_origin",
+      );
+      const delivered = fulfillmentOutcomes
+        .filter(
+          (row: RuntimeValue) => row.fulfillmentStatus !== "returned_to_origin",
+        )
+        .reduce((sum: number, row: RuntimeValue) => sum + Number(row.count), 0);
+      const confirmationTotal = confirmationOutcomes.reduce(
+        (sum: number, row: RuntimeValue) => sum + Number(row.count),
+        0,
+      );
       const revenueValue = moneyString(revenue?.total || 0);
       res.json({
         data: {
@@ -147,8 +227,30 @@ export class AdminController {
           pendingReturns,
           revenue: revenueValue,
           averageOrderValue: orders
-            ? moneyString(Number(revenueValue) / orders)
+            ? moneyString(money(revenueValue).dividedBy(orders))
             : "0.00",
+          tasks: { toConfirm, toPack, toShip, inTransit },
+          delivery: {
+            delivered,
+            returnedToOrigin,
+            rtoRate: percentage(returnedToOrigin, delivered + returnedToOrigin),
+          },
+          confirmation: {
+            confirmed: countOf(
+              confirmationOutcomes,
+              "confirmationStatus",
+              "confirmed",
+            ),
+            total: confirmationTotal,
+            confirmationRate: percentage(
+              countOf(confirmationOutcomes, "confirmationStatus", "confirmed"),
+              confirmationTotal,
+            ),
+          },
+          channels: channels.map((row: RuntimeValue) => ({
+            channel: row.channel,
+            count: Number(row.count),
+          })),
           orderTrend: orderTrend.map((row) => ({
             date: row.date,
             orders: Number(row.orders),

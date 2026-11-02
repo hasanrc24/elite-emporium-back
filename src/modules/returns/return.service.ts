@@ -18,6 +18,13 @@ import { normalizePhone } from "../../lib/normalization.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { settingValue } from "../settings/settings.service.js";
+import { holdTrigger } from "./exchange-hold.js";
+import {
+  holdExchangeStock,
+  releaseExchangeHolds,
+} from "./exchange-hold.service.js";
+import { notifyStaff } from "../notifications/staff-notification.service.js";
 import {
   calculateReturnEligibility,
   eligibilityDto,
@@ -221,6 +228,19 @@ export async function createReturn(
             "RETURN_QUANTITY_EXCEEDED",
             `Only ${eligibleItem.eligibleQuantity} of ${eligibleItem.sku} can be requested.`,
           );
+        if (
+          selected.requestedVariantId &&
+          (payload.resolution !== "exchange" ||
+            !eligibleItem.exchangeOptions.some(
+              (option: RuntimeValue) =>
+                option.variantId === selected.requestedVariantId &&
+                option.available,
+            ))
+        )
+          throw AppError.unprocessable(
+            "INVALID_EXCHANGE_VARIANT",
+            "The selected replacement size is not available.",
+          );
         estimate = estimate.plus(
           refundableLineAmount(eligibleItem.orderItem, selected.quantity),
         );
@@ -254,8 +274,9 @@ export async function createReturn(
         },
         { transaction },
       );
+      const createdItems: RuntimeValue[] = [];
       for (const selected of payload.items) {
-        await ReturnItem.create(
+        const created: RuntimeValue = await ReturnItem.create(
           {
             id: newId(),
             returnId: row.id,
@@ -263,9 +284,28 @@ export async function createReturn(
             quantity: selected.quantity,
             reason: selected.reason || payload.reason,
             resolution: payload.resolution,
+            requestedVariantId: selected.requestedVariantId || null,
           },
           { transaction },
         );
+        createdItems.push(created);
+      }
+      if (payload.resolution === "exchange") {
+        const returnsSettings: RuntimeValue = await settingValue(
+          "returns",
+          transaction,
+        );
+        if (holdTrigger(returnsSettings) === "request")
+          await holdExchangeStock(
+            createdItems,
+            new Map(
+              eligibility.items.map((item: RuntimeValue) => [
+                item.orderItemId,
+                item.exchangeOptions,
+              ]),
+            ),
+            transaction,
+          );
       }
       if (media.length) {
         await ReturnMedia.bulkCreate(
@@ -306,12 +346,13 @@ export async function createReturn(
         },
         transaction,
       });
-      await queueNotification({
+      await notifyStaff("returns", {
         event: "return.requested",
-        channel: "dashboard",
-        recipient: "staff:returns",
-        payload: {
-          message: `${row.reference} requires review.`,
+        title: `${row.type === "exchange" ? "Exchange" : "Return"} requested: ${row.reference}`,
+        message: `Order ${order.reference} · ${order.customerName}. Review it to approve or reject.`,
+        link: `/admin/returns/${row.id}`,
+        severity: "warning",
+        data: {
           returnReference: row.reference,
           orderReference: order.reference,
         },
@@ -468,6 +509,16 @@ export async function cancelReturn(
     row.cancelledAt = new Date();
     row.version += 1;
     await row.save({ transaction });
+    await releaseExchangeHolds(
+      (
+        await ReturnItem.findAll({
+          where: { returnId: row.id },
+          attributes: ["id"],
+          transaction,
+        })
+      ).map((item: RuntimeValue) => item.id),
+      transaction,
+    );
     await ReturnEvent.create(
       {
         id: newId(),
@@ -489,6 +540,16 @@ export async function cancelReturn(
         orderId: row.orderId,
         reason: payload.reason,
       },
+      transaction,
+    });
+    await notifyStaff("returns", {
+      event: "return.cancelled",
+      title: `Return ${row.reference} withdrawn by the customer`,
+      message: payload.reason
+        ? `Reason: ${String(payload.reason).slice(0, 300)}`
+        : null,
+      link: `/admin/returns/${row.id}`,
+      data: { returnReference: row.reference },
       transaction,
     });
     await recordAudit({

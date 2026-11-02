@@ -2,7 +2,6 @@ import {
   type CanActivate,
   type ExecutionContext,
   Injectable,
-  SetMetadata,
   UseInterceptors,
 } from "@nestjs/common";
 import type { CallHandler, NestInterceptor } from "@nestjs/common";
@@ -10,6 +9,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import type { Request } from "express";
 import { rateLimit } from "express-rate-limit";
 import multer from "multer";
+import { RedisStore } from "rate-limit-redis";
 import { Observable } from "rxjs";
 import type { ZodType } from "zod";
 import {
@@ -19,6 +19,7 @@ import {
 import { assertRequestOrigin } from "./middleware/origin-guard.js";
 import { type RequestSource, validateRequest } from "./middleware/validate.js";
 import { env } from "../config/env.js";
+import { redis } from "../lib/redis.js";
 import * as carts from "../modules/cart/cart.service.js";
 import * as wishlists from "../modules/wishlist/wishlist.service.js";
 
@@ -100,26 +101,54 @@ export class WishlistContextGuard implements CanActivate {
   }
 }
 
-const guestReturnLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: env.NODE_ENV === "test" ? 1000 : 20,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-});
+// Shared Redis counters keep limits consistent across API instances.
+const limiterStore = (prefix: string) =>
+  env.REDIS_OPTIONAL
+    ? undefined
+    : new RedisStore({
+        prefix: `rate:${prefix}:`,
+        sendCommand: async (command: string, ...args: string[]) =>
+          (await redis.call(command, ...args)) as never,
+      });
 
-const contactLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: env.NODE_ENV === "test" ? 1000 : 10,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-});
+// Built on first use: RedisStore loads its scripts on construction, which must
+// not happen at import time before the Redis connection is established.
+const hourlyLimiter = (prefix: string, limit: number) => {
+  let instance: ReturnType<typeof rateLimit> | undefined;
+  return () =>
+    (instance ??= rateLimit({
+      windowMs: 60 * 60 * 1000,
+      limit: env.NODE_ENV === "test" ? 1000 : limit,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      store: limiterStore(prefix),
+    }));
+};
+
+const guestReturnLimiter = hourlyLimiter("guest-return", 20);
+const contactLimiter = hourlyLimiter("contact", 10);
+const manualPaymentLimiter = hourlyLimiter("manual-payment", 15);
 
 @Injectable()
 export class ContactRateLimitGuard implements CanActivate {
   canActivate(context: ExecutionContext): Promise<boolean> {
     const http = context.switchToHttp();
     return new Promise((resolve, reject) => {
-      contactLimiter(
+      contactLimiter()(
+        http.getRequest(),
+        http.getResponse(),
+        (error?: unknown) => (error ? reject(error) : resolve(true)),
+      );
+    });
+  }
+}
+
+@Injectable()
+export class ManualPaymentRateLimitGuard implements CanActivate {
+  canActivate(context: ExecutionContext): Promise<boolean> {
+    const http = context.switchToHttp();
+    return new Promise((resolve, reject) => {
+      manualPaymentLimiter()(
         http.getRequest(),
         http.getResponse(),
         (error?: unknown) => (error ? reject(error) : resolve(true)),
@@ -133,7 +162,7 @@ export class GuestReturnRateLimitGuard implements CanActivate {
   canActivate(context: ExecutionContext): Promise<boolean> {
     const http = context.switchToHttp();
     return new Promise((resolve, reject) => {
-      guestReturnLimiter(
+      guestReturnLimiter()(
         http.getRequest(),
         http.getResponse(),
         (error?: unknown) => (error ? reject(error) : resolve(true)),
@@ -142,22 +171,32 @@ export class GuestReturnRateLimitGuard implements CanActivate {
   }
 }
 
-const permissionMetadata = Symbol("required-permission");
-export const Permissions = (permission: string) =>
-  SetMetadata(permissionMetadata, permission);
+const permissionMetadata = Symbol("required-permissions");
+// Stacked @Permissions decorators accumulate; every listed key is required.
+export const Permissions =
+  (...permissions: string[]): MethodDecorator =>
+  (_target, _key, descriptor) => {
+    const existing =
+      (Reflect.getMetadata(permissionMetadata, descriptor.value as object) as
+        string[] | undefined) ?? [];
+    Reflect.defineMetadata(
+      permissionMetadata,
+      [...existing, ...permissions],
+      descriptor.value as object,
+    );
+    return descriptor;
+  };
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const permission = Reflect.getMetadata(
+    const permissions = (Reflect.getMetadata(
       permissionMetadata,
       context.getHandler(),
-    ) as string | undefined;
-    if (permission)
-      requireRequestPermission(
-        context.switchToHttp().getRequest<Request>(),
-        permission,
-      );
+    ) ?? []) as string[];
+    const request = context.switchToHttp().getRequest<Request>();
+    for (const permission of permissions)
+      requireRequestPermission(request, permission);
     return true;
   }
 }

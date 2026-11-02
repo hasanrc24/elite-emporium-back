@@ -1,4 +1,4 @@
-import { Op } from "sequelize";
+import { literal, Op } from "sequelize";
 import {
   Attribute,
   AttributeTranslation,
@@ -11,12 +11,16 @@ import {
   Collection,
   CollectionTranslation,
   MediaAsset,
+  Product,
   ProductAttribute,
   ProductVariant,
+  SizeChart,
+  SizeChartRow,
 } from "../../db/models.js";
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
 
@@ -163,15 +167,17 @@ export async function listTaxonomies(kind: RuntimeValue, query: RuntimeValue) {
     where.deletedAt = null;
   }
   if (query.status === "archived") where.deletedAt = { [Op.ne]: null };
-  if (query.search)
+  if (query.search) {
+    // EXISTS keeps the filter valid inside Sequelize's LIMIT subquery, where
+    // the hasMany translations join is not available.
+    const term: RuntimeValue = likeContains(query.search, 80);
     where[Op.or] = [
-      { slug: { [Op.like]: `%${String(query.search).slice(0, 80)}%` } },
-      {
-        "$translations.name$": {
-          [Op.like]: `%${String(query.search).slice(0, 80)}%`,
-        },
-      },
+      { slug: { [Op.like]: term } },
+      literal(
+        `EXISTS (SELECT 1 FROM ${value.translation.getTableName()} t WHERE t.${value.foreignKey} = ${value.model.name}.id AND t.name LIKE ${sequelize.escape(term)})`,
+      ),
     ];
+  }
   const result: RuntimeValue = await value.model.findAndCountAll({
     where,
     paranoid: false,
@@ -349,6 +355,21 @@ export async function archiveTaxonomy(
       throw AppError.conflict(
         "CATEGORY_HAS_CHILDREN",
         "Move or archive child categories first.",
+      );
+    // Publication requires a primary category; do not strand live products.
+    if (
+      kind === "categories" &&
+      (await Product.count({
+        where: {
+          categoryId: id,
+          status: { [Op.in]: ["published", "scheduled"] },
+        },
+        transaction,
+      }))
+    )
+      throw AppError.conflict(
+        "CATEGORY_IN_USE",
+        "Move published or scheduled products to another category first.",
       );
     row.active = false;
     row.version += 1;
@@ -587,4 +608,393 @@ export async function attributeUsage(id: RuntimeValue) {
     }),
   ]);
   return { products, variants };
+}
+
+async function lockAttribute(id: RuntimeValue, transaction: RuntimeValue) {
+  const attribute: RuntimeValue = await Attribute.findByPk(id, {
+    paranoid: false,
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  if (!attribute) throw AppError.notFound("Attribute not found.");
+  return attribute;
+}
+
+async function hydratedAttribute(id: RuntimeValue, transaction: RuntimeValue) {
+  return attributeDto(
+    await Attribute.findByPk(id, {
+      paranoid: false,
+      include: attributeInclude,
+      transaction,
+    }),
+  );
+}
+
+async function saveLabels(
+  model: RuntimeValue,
+  foreignKey: string,
+  ownerId: string,
+  translations: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  for (const locale of ["en", "bn"]) {
+    const [row]: RuntimeValue = await model.findOrCreate({
+      where: { [foreignKey]: ownerId, locale },
+      defaults: {
+        id: newId(),
+        [foreignKey]: ownerId,
+        locale,
+        label: translations[locale].label,
+      },
+      transaction,
+    });
+    if (!row.isNewRecord)
+      await row.update({ label: translations[locale].label }, { transaction });
+  }
+}
+
+export async function updateAttribute(
+  id: RuntimeValue,
+  payload: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const attribute: RuntimeValue = await lockAttribute(id, transaction);
+    if (Number(payload.version) !== Number(attribute.version))
+      throw AppError.conflict(
+        "VERSION_CONFLICT",
+        "This attribute changed. Refresh and review the latest version.",
+      );
+    const before: RuntimeValue = await hydratedAttribute(id, transaction);
+    await attribute.update(
+      {
+        filterable: payload.filterable,
+        variationCapable: payload.variationCapable,
+        displayOrder: payload.displayOrder,
+        active: payload.active,
+        version: attribute.version + 1,
+      },
+      { transaction },
+    );
+    await saveLabels(
+      AttributeTranslation,
+      "attributeId",
+      attribute.id,
+      payload.translations,
+      transaction,
+    );
+    const after: RuntimeValue = await hydratedAttribute(id, transaction);
+    await recordAudit({
+      actorId,
+      action: "catalog.attribute.update",
+      resourceType: "attribute",
+      resourceId: id,
+      before,
+      after,
+      request,
+      transaction,
+    });
+    return after;
+  });
+}
+
+export async function createAttributeValue(
+  attributeId: RuntimeValue,
+  payload: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const attribute: RuntimeValue = await lockAttribute(
+      attributeId,
+      transaction,
+    );
+    if (
+      await AttributeValue.count({
+        where: { attributeId, slug: payload.slug },
+        paranoid: false,
+        transaction,
+      })
+    )
+      throw new AppError(
+        409,
+        "VALUE_SLUG_IN_USE",
+        "This attribute already has a value with that slug.",
+        { slug: ["This slug is already used by another value."] },
+      );
+    const value: RuntimeValue = await AttributeValue.create(
+      {
+        id: newId(),
+        attributeId: attribute.id,
+        slug: payload.slug,
+        value: payload.value,
+        colorHex: payload.colorHex || null,
+        displayOrder: payload.displayOrder,
+        active: true,
+        version: 1,
+      },
+      { transaction },
+    );
+    await saveLabels(
+      AttributeValueTranslation,
+      "valueId",
+      value.id,
+      payload.translations,
+      transaction,
+    );
+    const after: RuntimeValue = await hydratedAttribute(
+      attributeId,
+      transaction,
+    );
+    await recordAudit({
+      actorId,
+      action: "catalog.attribute_value.create",
+      resourceType: "attribute",
+      resourceId: attributeId,
+      metadata: { valueId: value.id, slug: payload.slug },
+      request,
+      transaction,
+    });
+    return after;
+  });
+}
+
+export async function updateAttributeValue(
+  attributeId: RuntimeValue,
+  valueId: RuntimeValue,
+  payload: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    await lockAttribute(attributeId, transaction);
+    const value: RuntimeValue = await AttributeValue.findOne({
+      where: { id: valueId, attributeId },
+      paranoid: false,
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!value) throw AppError.notFound("Attribute value not found.");
+    if (Number(payload.version) !== Number(value.version))
+      throw AppError.conflict(
+        "VERSION_CONFLICT",
+        "This value changed. Refresh and review the latest version.",
+      );
+    // The raw value is copied into variant attributes, so it is immutable.
+    await value.update(
+      {
+        colorHex: payload.colorHex || null,
+        displayOrder: payload.displayOrder,
+        active: payload.active,
+        version: value.version + 1,
+      },
+      { transaction },
+    );
+    await saveLabels(
+      AttributeValueTranslation,
+      "valueId",
+      value.id,
+      payload.translations,
+      transaction,
+    );
+    await recordAudit({
+      actorId,
+      action: "catalog.attribute_value.update",
+      resourceType: "attribute",
+      resourceId: attributeId,
+      metadata: { valueId, active: payload.active },
+      request,
+      transaction,
+    });
+    return hydratedAttribute(attributeId, transaction);
+  });
+}
+
+function sizeChartDto(chart: RuntimeValue) {
+  return {
+    id: chart.id,
+    name: chart.name,
+    units: chart.units,
+    titleEn: chart.titleEn,
+    titleBn: chart.titleBn,
+    rows: [...(chart.rows || [])]
+      .sort(
+        (left: RuntimeValue, right: RuntimeValue) =>
+          Number(left.displayOrder) - Number(right.displayOrder),
+      )
+      .map((row: RuntimeValue) => ({
+        labelEn: row.labelEn,
+        labelBn: row.labelBn,
+        cells: row.cells,
+      })),
+    version: Number(chart.version),
+    archivedAt: chart.deletedAt || null,
+    updatedAt: chart.updatedAt,
+  };
+}
+
+export async function listSizeCharts(query: RuntimeValue) {
+  const { page, pageSize, limit, offset }: RuntimeValue = pagination(query);
+  const result: RuntimeValue = await SizeChart.findAndCountAll({
+    where: query.search
+      ? { name: { [Op.like]: likeContains(query.search, 80) } }
+      : {},
+    include: [{ model: SizeChartRow, as: "rows" }],
+    distinct: true,
+    limit,
+    offset,
+    order: [["name", "ASC"]],
+  });
+  return {
+    data: result.rows.map(sizeChartDto),
+    meta: pageEnvelope(result, page, pageSize).meta,
+  };
+}
+
+export async function getSizeChart(id: RuntimeValue) {
+  const chart: RuntimeValue = await SizeChart.findByPk(id, {
+    include: [{ model: SizeChartRow, as: "rows" }],
+  });
+  if (!chart) throw AppError.notFound("Size chart not found.");
+  return sizeChartDto(chart);
+}
+
+async function replaceChartRows(
+  chartId: string,
+  rows: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  await SizeChartRow.destroy({ where: { chartId }, transaction });
+  await SizeChartRow.bulkCreate(
+    rows.map((row: RuntimeValue, index: number) => ({
+      id: newId(),
+      chartId,
+      labelEn: row.labelEn,
+      labelBn: row.labelBn,
+      cells: row.cells,
+      displayOrder: index,
+    })),
+    { transaction },
+  );
+}
+
+export async function createSizeChart(
+  payload: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const chart: RuntimeValue = await SizeChart.create(
+      {
+        id: newId(),
+        name: payload.name,
+        units: payload.units,
+        titleEn: payload.titleEn,
+        titleBn: payload.titleBn,
+        version: 1,
+      },
+      { transaction },
+    );
+    await replaceChartRows(chart.id, payload.rows, transaction);
+    await recordAudit({
+      actorId,
+      action: "catalog.size_chart.create",
+      resourceType: "size_chart",
+      resourceId: chart.id,
+      after: payload,
+      request,
+      transaction,
+    });
+    return sizeChartDto(
+      await SizeChart.findByPk(chart.id, {
+        include: [{ model: SizeChartRow, as: "rows" }],
+        transaction,
+      }),
+    );
+  });
+}
+
+export async function updateSizeChart(
+  id: RuntimeValue,
+  payload: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const chart: RuntimeValue = await SizeChart.findByPk(id, {
+      include: [{ model: SizeChartRow, as: "rows" }],
+      transaction,
+      lock: { level: transaction.LOCK.UPDATE, of: SizeChart },
+    });
+    if (!chart) throw AppError.notFound("Size chart not found.");
+    if (Number(payload.version) !== Number(chart.version))
+      throw AppError.conflict(
+        "VERSION_CONFLICT",
+        "This size chart changed. Refresh and review the latest version.",
+      );
+    const before = sizeChartDto(chart);
+    await chart.update(
+      {
+        name: payload.name,
+        units: payload.units,
+        titleEn: payload.titleEn,
+        titleBn: payload.titleBn,
+        version: chart.version + 1,
+      },
+      { transaction },
+    );
+    await replaceChartRows(chart.id, payload.rows, transaction);
+    const after = sizeChartDto(
+      await SizeChart.findByPk(id, {
+        include: [{ model: SizeChartRow, as: "rows" }],
+        transaction,
+      }),
+    );
+    await recordAudit({
+      actorId,
+      action: "catalog.size_chart.update",
+      resourceType: "size_chart",
+      resourceId: id,
+      before,
+      after,
+      request,
+      transaction,
+    });
+    return after;
+  });
+}
+
+export async function archiveSizeChart(
+  id: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+) {
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const chart: RuntimeValue = await SizeChart.findByPk(id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!chart) throw AppError.notFound("Size chart not found.");
+    const live: RuntimeValue = await chart.countProducts({
+      where: { status: { [Op.in]: ["published", "scheduled"] } },
+      transaction,
+    });
+    if (live)
+      throw AppError.conflict(
+        "SIZE_CHART_IN_USE",
+        "Published products use this size chart. Assign another chart first.",
+      );
+    chart.version += 1;
+    await chart.save({ transaction });
+    await chart.destroy({ transaction });
+    await recordAudit({
+      actorId,
+      action: "catalog.size_chart.archive",
+      resourceType: "size_chart",
+      resourceId: id,
+      request,
+      transaction,
+    });
+  });
 }

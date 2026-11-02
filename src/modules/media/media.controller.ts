@@ -189,6 +189,8 @@ export class MediaController {
         actorId: req.auth.user.id,
         request: req,
         purpose,
+        // Public review media is shown on the storefront: images only.
+        allowDocuments: purpose === "return",
       });
       res.status(201).json({ data, meta: null, requestId: req.id });
     })(request, response);
@@ -239,10 +241,14 @@ export class MediaController {
       const buffer = await readMedia(asset.storageKey);
       res.setHeader("Content-Type", asset.mimeType);
       res.setHeader("Content-Length", String(buffer.length));
+      // Header values must be Latin-1; Bangla or emoji names would make
+      // setHeader throw, so send an ASCII fallback plus RFC 5987 filename*.
+      const name = String(asset.originalName || "download");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${String(asset.originalName).replace(/["\r\n]/g, "_")}"`,
+        `attachment; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`,
       );
+      res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cache-Control", "private, no-store");
       res.end(buffer);
     })(request, response);

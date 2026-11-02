@@ -4,7 +4,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { env } from "../../config/env.js";
@@ -63,30 +63,83 @@ export async function persistOriginal({
   };
 }
 
-export async function processImage(storageKey: string) {
-  const inputPath = absoluteMediaPath(storageKey);
-  const metadata = await sharp(inputPath, {
-    failOn: "warning",
-    limitInputPixels: 50_000_000,
-  }).metadata();
+const derivedWidths = [480, 960, 1600];
+const derivedFormats = ["webp", "avif"] as const;
+const inputLimits = {
+  failOn: "warning",
+  limitInputPixels: 50_000_000,
+} as const;
+
+function derivedKey(
+  storageKey: string,
+  width: number,
+  format: (typeof derivedFormats)[number] = "webp",
+): string {
   const baseName = path.basename(storageKey, path.extname(storageKey));
   const privacy = storageKey.split("/")[0];
-  const variants = [];
-  for (const width of [480, 960, 1600]) {
+  return `${privacy}/derived/${baseName}-${width}.${format}`;
+}
+
+/** Removes an original and any derived files written for it. */
+export async function discardMedia(storageKey: string) {
+  await Promise.all(
+    [
+      storageKey,
+      ...derivedWidths.flatMap((width) =>
+        derivedFormats.map((format) => derivedKey(storageKey, width, format)),
+      ),
+    ].map((key) => rm(absoluteMediaPath(key), { force: true })),
+  );
+}
+
+/**
+ * Re-encodes an upload in its own format with orientation applied and all
+ * metadata (EXIF GPS, camera, XMP) dropped, so the publicly served original
+ * never leaks the uploader's location. Throws for undecodable input.
+ */
+export async function stripImageMetadata(
+  buffer: Buffer,
+  mime: string,
+): Promise<Buffer> {
+  const pipeline = sharp(buffer, inputLimits).rotate();
+  if (mime === "image/jpeg")
+    return pipeline.jpeg({ quality: 92, mozjpeg: true }).toBuffer();
+  if (mime === "image/png") return pipeline.png().toBuffer();
+  if (mime === "image/webp") return pipeline.webp({ quality: 92 }).toBuffer();
+  if (mime === "image/avif") return pipeline.avif({ quality: 70 }).toBuffer();
+  return buffer;
+}
+
+export async function processImage(storageKey: string) {
+  const inputPath = absoluteMediaPath(storageKey);
+  const metadata = await sharp(inputPath, inputLimits).metadata();
+  const variants: {
+    width: number;
+    format: string;
+    storageKey: string;
+    url: string | null;
+  }[] = [];
+  for (const width of derivedWidths) {
     if (metadata.width && width > metadata.width) continue;
-    const relative = `${privacy}/derived/${baseName}-${width}.webp`;
-    const destination = absoluteMediaPath(relative);
-    await mkdir(path.dirname(destination), { recursive: true, mode: 0o750 });
-    await sharp(inputPath, { failOn: "warning", limitInputPixels: 50_000_000 })
-      .rotate()
-      .resize({ width, withoutEnlargement: true })
-      .webp({ quality: 82, effort: 4 })
-      .toFile(destination);
-    variants.push({
-      width,
-      storageKey: relative,
-      url: mediaPublicUrl(relative),
-    });
+    for (const format of derivedFormats) {
+      const relative = derivedKey(storageKey, width, format);
+      const destination = absoluteMediaPath(relative);
+      await mkdir(path.dirname(destination), { recursive: true, mode: 0o750 });
+      const pipeline = sharp(inputPath, inputLimits)
+        .rotate()
+        .resize({ width, withoutEnlargement: true });
+      await (
+        format === "webp"
+          ? pipeline.webp({ quality: 82, effort: 4 })
+          : pipeline.avif({ quality: 55, effort: 2 })
+      ).toFile(destination);
+      variants.push({
+        width,
+        format,
+        storageKey: relative,
+        url: mediaPublicUrl(relative),
+      });
+    }
   }
   return {
     width: metadata.width || null,

@@ -57,6 +57,18 @@ const manualOrderSchema = z.object({
   note: z.string().trim().max(5000).optional(),
   status: z.enum(["draft", "placed"]).default("draft"),
   locale: z.enum(["en", "bn"]).default("en"),
+  channel: z
+    .enum(["facebook", "instagram", "whatsapp", "phone", "walk_in", "other"])
+    .default("phone"),
+  tags: z
+    .array(
+      z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9-]{1,40}$/),
+    )
+    .max(12)
+    .default([]),
 });
 
 @Controller("admin")
@@ -66,7 +78,7 @@ export class AdminOrderController {
   ) {}
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminOrders.create")
+  @Permissions("orders.create")
   @ValidateRequest(manualOrderSchema)
   @Post("/orders")
   route0(@Req() request: Request, @Res() response: Response): Promise<unknown> {
@@ -85,7 +97,7 @@ export class AdminOrderController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminOrders.view")
+  @Permissions("orders.view")
   @Get("/orders")
   route1(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
@@ -95,7 +107,7 @@ export class AdminOrderController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminOrders.view")
+  @Permissions("orders.view")
   @Get("/orders/:id")
   route2(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) =>
@@ -107,7 +119,7 @@ export class AdminOrderController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminOrders.progress")
+  @Permissions("orders.progress")
   @ValidateRequest(
     z.object({
       dimension: z.enum(["order", "fulfillment"]),
@@ -134,7 +146,7 @@ export class AdminOrderController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminOrders.cancel")
+  @Permissions("orders.cancel")
   @ValidateRequest(z.object({ reason: z.string().trim().min(3).max(500) }))
   @Post("/orders/:id/cancel")
   route4(@Req() request: Request, @Res() response: Response): Promise<unknown> {
@@ -152,7 +164,7 @@ export class AdminOrderController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("adminOrders.edit")
+  @Permissions("orders.edit")
   @ValidateRequest(
     z.object({
       visibility: z.enum(["internal", "customer"]).default("internal"),

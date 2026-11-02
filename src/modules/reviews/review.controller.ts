@@ -22,6 +22,7 @@ const reviewBody = z.object({
   productId: z.string().length(26),
   orderItemId: z.string().length(26),
   rating: z.number().int().min(1).max(5),
+  fit: z.enum(["small", "true_to_size", "large"]).nullable().optional(),
   title: z.string().trim().max(180).optional().default(""),
   body: z.string().trim().min(1).max(5000),
   mediaIds: z.array(z.string().length(26)).max(5).default([]),

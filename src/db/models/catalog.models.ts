@@ -274,7 +274,9 @@ initializeModel(
       defaultValue: "standard",
     },
     shippingProfile: DataTypes.JSON,
+    fashion: DataTypes.JSON,
     canonicalUrl: DataTypes.STRING(500),
+    lowStockThreshold: DataTypes.INTEGER.UNSIGNED,
     reviewAverage: {
       type: DataTypes.DECIMAL(3, 2),
       allowNull: false,
@@ -329,13 +331,14 @@ initializeModel(
     costPrice: DataTypes.DECIMAL(12, 2),
     saleStartsAt: DataTypes.DATE,
     saleEndsAt: DataTypes.DATE,
-     stockPolicy: {
+    stockPolicy: {
       type: DataTypes.ENUM("deny", "allow_backorder", "preorder", "available"),
       allowNull: false,
       defaultValue: "deny",
     },
     preorderAvailableAt: DataTypes.DATE,
     preorderMessage: DataTypes.STRING(255),
+    lowStockThreshold: DataTypes.INTEGER.UNSIGNED,
     weightGrams: DataTypes.INTEGER.UNSIGNED,
     dimensions: DataTypes.JSON,
     status: {
@@ -542,6 +545,7 @@ initializeModel(
     convertedAt: DataTypes.DATE,
     consumedAt: DataTypes.DATE,
     idempotencyKey: { type: DataTypes.STRING(150), allowNull: false },
+    returnItemId: DataTypes.CHAR(26),
   },
   { modelName: "InventoryReservation", tableName: "inventory_reservations" },
 );

@@ -12,6 +12,7 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { money, moneyString } from "../../lib/money.js";
 import { normalizePhone } from "../../lib/normalization.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
@@ -268,7 +269,7 @@ export async function listCoupons(query: RuntimeValue) {
   if (query.type) where.type = query.type;
   if (query.search)
     where.code = {
-      [Op.like]: `%${String(query.search).slice(0, 80).toUpperCase()}%`,
+      [Op.like]: likeContains(String(query.search).toUpperCase(), 80),
     };
   const result: RuntimeValue = await Coupon.findAndCountAll({
     where,

@@ -19,6 +19,7 @@ import {
   Permissions,
   ValidateRequest,
 } from "../../app/request-security.js";
+import { requireRequestPermission } from "../../app/middleware/authenticate.js";
 const id = z.string().length(26);
 
 const roleSchema = z.object({
@@ -49,8 +50,9 @@ export class AdminStaffController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
+  // PermissionGuard holds a single key per handler (stacked @Permissions
+  // overwrite each other); roles.manage is enforced in the handler below.
   @Permissions("staff.manage")
-  @Permissions("roles.manage")
   @ValidateRequest(
     z.object({
       name: z.string().trim().min(2).max(120),
@@ -63,6 +65,7 @@ export class AdminStaffController {
   @Post("/staff")
   route1(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
+      requireRequestPermission(req, "roles.manage");
       res.status(201).json({
         data: await this.services.staff.createStaff(
           req.body,
@@ -174,7 +177,10 @@ export class AdminStaffController {
   route6(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
       res.json({
-        data: await this.services.staff.listStaffSessions(req.params.id),
+        data: await this.services.staff.listStaffSessions(
+          req.params.id,
+          req.auth.user.id,
+        ),
         meta: null,
         requestId: req.id,
       });

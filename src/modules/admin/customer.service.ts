@@ -1,4 +1,4 @@
-import { col, fn, Op } from "sequelize";
+import { col, fn, literal, Op } from "sequelize";
 import {
   AuthSession,
   CustomerNote,
@@ -16,6 +16,7 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { moneyString } from "../../lib/money.js";
 import { normalizeEmail, normalizePhone } from "../../lib/normalization.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
@@ -49,6 +50,10 @@ function customerDto(user: RuntimeValue, stats: RuntimeValue = {}) {
     deletedAt: user.deletedAt || null,
     stats: {
       orderCount: Number(stats.orderCount || 0),
+      deliveredCount: Number(stats.deliveredCount || 0),
+      cancelledCount: Number(stats.cancelledCount || 0),
+      rtoCount: Number(stats.rtoCount || 0),
+      lifetimeValue: moneyString(stats.lifetimeValue || 0),
       grossPaid: moneyString(stats.grossPaid || 0),
       returnCount: Number(stats.returnCount || 0),
       reviewCount: Number(stats.reviewCount || 0),
@@ -58,6 +63,8 @@ function customerDto(user: RuntimeValue, stats: RuntimeValue = {}) {
     updatedAt: user.updatedAt,
   };
 }
+
+const acceptedStatuses = "'delivered', 'partially_returned', 'returned'";
 
 function mapAggregates(rows: RuntimeValue) {
   return new Map(rows.map((row: RuntimeValue) => [row.userId, row]));
@@ -71,6 +78,30 @@ async function customerStats(userIds: RuntimeValue) {
         "userId",
         [fn("COUNT", col("id")), "orderCount"],
         [fn("MAX", col("createdAt")), "lastOrderAt"],
+        // Operational profile (BR-ID-004). Accepted parcels include later
+        // returns; lifetime value nets out completed refunds.
+        [
+          literal(
+            `SUM(CASE WHEN fulfillmentStatus IN (${acceptedStatuses}) THEN 1 ELSE 0 END)`,
+          ),
+          "deliveredCount",
+        ],
+        [
+          literal("SUM(CASE WHEN orderStatus = 'cancelled' THEN 1 ELSE 0 END)"),
+          "cancelledCount",
+        ],
+        [
+          literal(
+            "SUM(CASE WHEN fulfillmentStatus = 'returned_to_origin' THEN 1 ELSE 0 END)",
+          ),
+          "rtoCount",
+        ],
+        [
+          literal(
+            `COALESCE(SUM(CASE WHEN fulfillmentStatus IN (${acceptedStatuses}) THEN grandTotal - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.orderId = Order.id AND r.status = 'completed') ELSE 0 END), 0)`,
+          ),
+          "lifetimeValue",
+        ],
       ],
       where: { userId: { [Op.in]: userIds } },
       group: ["userId"],
@@ -131,11 +162,11 @@ export async function listCustomers(query: RuntimeValue) {
   if (query.riskLevel) where.riskLevel = query.riskLevel;
   if (query.locale) where.locale = query.locale;
   if (query.search) {
-    const search: RuntimeValue = String(query.search).trim().slice(0, 120);
+    const search: RuntimeValue = likeContains(query.search, 120);
     where[Op.or] = [
-      { name: { [Op.like]: `%${search}%` } },
-      { phone: { [Op.like]: `%${search}%` } },
-      { email: { [Op.like]: `%${search}%` } },
+      { name: { [Op.like]: search } },
+      { phone: { [Op.like]: search } },
+      { email: { [Op.like]: search } },
     ];
   }
   if (query.createdFrom || query.createdTo)

@@ -62,7 +62,9 @@ export async function resolveWishlist(
   let wishlist: RuntimeValue = where ? await Wishlist.findOne({ where }) : null;
   let issuedToken = null;
   if (!wishlist && create) {
-    if (!userId) issuedToken = token || randomToken();
+    // Always issue a fresh token: the cookie's token may still belong to a
+    // converted/merged row, and reusing it violates the unique tokenHash.
+    if (!userId) issuedToken = randomToken();
     wishlist = await Wishlist.create({
       id: newId(),
       userId: userId || null,

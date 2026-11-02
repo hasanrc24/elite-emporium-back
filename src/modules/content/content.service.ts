@@ -6,6 +6,7 @@ import {
   ContactMessage,
   ContentRevision,
   HomepageSection,
+  MediaAsset,
   Menu,
   MenuItem,
   Page,
@@ -23,8 +24,11 @@ import { sha256 } from "../../lib/crypto.js";
 import { normalizeEmail, normalizePhone } from "../../lib/normalization.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
+import { likeContains } from "../../lib/like.js";
 import { recordAudit } from "../audits/audit.service.js";
-import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { addDomainEvent } from "../events/outbox.service.js";
+import { notifyStaff } from "../notifications/staff-notification.service.js";
+import { mediaPublicUrl } from "../media/media.storage.js";
 
 const allowedBlocks = new Set([
   "rich_text",
@@ -47,7 +51,9 @@ const translatedInclude = (model: RuntimeValue) => ({
 
 function validateUrl(value: RuntimeValue) {
   if (value == null || value === "") return value;
-  if (String(value).startsWith("/")) return String(value);
+  // Site-relative paths only: "//host" and "/\\host" are protocol-relative
+  // links to another origin.
+  if (/^\/(?![/\\])/.test(String(value))) return String(value);
   let url;
   try {
     url = new URL(value);
@@ -65,7 +71,7 @@ function validateUrl(value: RuntimeValue) {
   return url.toString();
 }
 
-function sanitizeValue(
+export function sanitizeValue(
   value: RuntimeValue,
   key: RuntimeValue = "",
 ): RuntimeValue {
@@ -74,7 +80,10 @@ function sanitizeValue(
   if (!value || typeof value !== "object") {
     if (typeof value === "string" && /(?:url|link|href)$/i.test(key))
       return validateUrl(value);
-    if (typeof value === "string" && /(?:html|richText|content)$/i.test(key))
+    if (
+      typeof value === "string" &&
+      /(?:html|richText|content|body)$/i.test(key)
+    )
       return sanitizeHtml(value, {
         allowedTags: [
           "p",
@@ -97,7 +106,9 @@ function sanitizeValue(
   return Object.fromEntries(
     Object.entries(value).map(([childKey, child]: RuntimeValue) => [
       childKey,
-      sanitizeValue(child, childKey),
+      // Localised wrappers ({ html: { en, bn } }) keep the field's type, so
+      // the HTML/URL checks still apply to each locale's value.
+      sanitizeValue(child, ["en", "bn"].includes(childKey) ? key : childKey),
     ]),
   );
 }
@@ -144,6 +155,7 @@ function publicContent(row: RuntimeValue, locale: RuntimeValue) {
     },
     publishedAt: row.publishAt || row.updatedAt,
     updatedAt: row.updatedAt,
+    coverUrl: row.coverMedia ? mediaPublicUrl(row.coverMedia.storageKey) : null,
   };
 }
 function adminContent(row: RuntimeValue) {
@@ -202,6 +214,12 @@ export async function listPublicPosts(
     include: [
       translatedInclude(PostTranslation),
       { model: PostCategory, as: "category", required: false },
+      {
+        model: MediaAsset,
+        as: "coverMedia",
+        required: false,
+        where: { status: "ready", privacy: "public" },
+      },
     ],
     distinct: true,
     limit,
@@ -230,6 +248,12 @@ export async function getPublicPost(slug: RuntimeValue, locale: RuntimeValue) {
     include: [
       translatedInclude(PostTranslation),
       { model: PostCategory, as: "category", required: false },
+      {
+        model: MediaAsset,
+        as: "coverMedia",
+        required: false,
+        where: { status: "ready", privacy: "public" },
+      },
     ],
   });
   if (!row) throw AppError.notFound("Post not found.");
@@ -426,14 +450,12 @@ export async function submitContact(
       },
       { transaction },
     );
-    await queueNotification({
+    await notifyStaff("support", {
       event: "contact.received",
-      channel: "dashboard",
-      recipient: "staff:support",
-      payload: {
-        message: `New contact message: ${row.subject}`,
-        contactMessageId: row.id,
-      },
+      title: `New message from ${row.name}`,
+      message: row.subject,
+      link: "/admin/contact-messages",
+      data: { contactMessageId: row.id },
       transaction,
     });
     return { id: row.id, accepted: true };
@@ -455,8 +477,7 @@ export async function listAdminContent(
     ...(query.status ? { status: query.status } : {}),
     ...dateRangeWhere(query),
   };
-  if (query.search)
-    where.slug = { [Op.like]: `%${String(query.search).slice(0, 100)}%` };
+  if (query.search) where.slug = { [Op.like]: likeContains(query.search, 100) };
   const result: RuntimeValue = await Model.findAndCountAll({
     where,
     paranoid: false,
@@ -548,6 +569,12 @@ export async function saveContent(
       throw AppError.conflict(
         "VERSION_CONFLICT",
         `This ${kind} changed. Refresh and review the latest version.`,
+      );
+    if (payload.status === "scheduled" && !payload.publishAt)
+      throw AppError.unprocessable(
+        "PUBLISH_AT_REQUIRED",
+        "Choose when scheduled content should be published.",
+        { publishAt: ["Choose when scheduled content should be published."] },
       );
     const base =
       kind === "page"

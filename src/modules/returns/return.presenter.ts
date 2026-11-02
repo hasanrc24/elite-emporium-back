@@ -3,6 +3,7 @@ import {
   Order,
   OrderItem,
   Payment,
+  ProductVariant,
   Refund,
   ReturnEvent,
   ReturnItem,
@@ -22,8 +23,25 @@ export const returnDetailInclude = [
     model: ReturnItem,
     as: "items",
     include: [
-      { model: OrderItem, as: "orderItem" },
+      {
+        model: OrderItem,
+        as: "orderItem",
+        include: [
+          {
+            model: ProductVariant,
+            as: "variant",
+            attributes: ["id", "productId"],
+            required: false,
+          },
+        ],
+      },
       { model: StockLocation, as: "restockLocation", required: false },
+      {
+        model: ProductVariant,
+        as: "requestedVariant",
+        attributes: ["id", "title", "sku"],
+        required: false,
+      },
     ],
   },
   {
@@ -52,6 +70,15 @@ function privateMediaDto(asset: DynamicModel) {
     url: `${env.API_BASE_PATH}/media/${asset.id}/download?expires=${expires}&signature=${encodeURIComponent(signature)}`,
     expiresAt: new Date(expires * 1000).toISOString(),
   };
+}
+
+// Refund capacities and staff-approved maximums are internal settlement data.
+function customerPolicy(snapshot: RuntimeValue) {
+  if (!snapshot || typeof snapshot !== "object") return snapshot ?? null;
+  const visible = { ...snapshot };
+  delete visible.paymentCapacities;
+  delete visible.approvedRefundMaximum;
+  return visible;
 }
 
 export function returnDto(
@@ -107,7 +134,14 @@ export function returnDto(
           }
         : null,
       restockedAt: item.restockedAt || null,
-      inspectionNote: item.inspectionNote || null,
+      requestedVariant: item.requestedVariant
+        ? {
+            id: item.requestedVariant.id,
+            title: item.requestedVariant.title,
+            sku: item.requestedVariant.sku,
+          }
+        : null,
+      inspectionNote: internal ? item.inspectionNote || null : undefined,
       orderItem: item.orderItem
         ? {
             productName: item.orderItem.productName,
@@ -119,6 +153,12 @@ export function returnDto(
             quantity: Number(item.orderItem.quantity),
             fulfilledQuantity: Number(item.orderItem.fulfilledQuantity),
             returnedQuantity: Number(item.orderItem.returnedQuantity),
+            ...(internal
+              ? {
+                  variantId: item.orderItem.variant?.id || null,
+                  productId: item.orderItem.variant?.productId || null,
+                }
+              : {}),
           }
         : null,
     })),
@@ -157,7 +197,7 @@ export function returnDto(
           metadata: internal ? row.replacementOrder.metadata : undefined,
         }
       : null,
-    policy: row.policySnapshot,
+    policy: internal ? row.policySnapshot : customerPolicy(row.policySnapshot),
     version: Number(row.version),
     requestedAt: row.requestedAt,
     approvedAt: row.approvedAt,

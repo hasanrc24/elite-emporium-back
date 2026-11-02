@@ -92,6 +92,57 @@ const attributeSchema = z.object({
   values: z.array(attributeValue).max(250).default([]),
 });
 
+const labels = z.object({
+  en: z.object({ label: z.string().trim().min(1).max(160) }),
+  bn: z.object({ label: z.string().trim().min(1).max(160) }),
+});
+const version = z.number().int().positive();
+const attributeUpdate = z.object({
+  version,
+  filterable: z.boolean(),
+  variationCapable: z.boolean(),
+  active: z.boolean(),
+  displayOrder: z.number().int().min(0).default(0),
+  translations: labels,
+});
+const attributeValueUpdate = z.object({
+  version,
+  colorHex: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .nullable()
+    .optional(),
+  active: z.boolean(),
+  displayOrder: z.number().int().min(0).default(0),
+  translations: labels,
+});
+const sizeChartSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  units: z.enum(["cm", "in"]),
+  titleEn: z.string().trim().min(1).max(180),
+  titleBn: z.string().trim().min(1).max(180),
+  rows: z
+    .array(
+      z.object({
+        labelEn: z.string().trim().min(1).max(120),
+        labelBn: z.string().trim().min(1).max(120),
+        cells: z
+          .record(
+            z
+              .string()
+              .regex(/^[a-z][a-z0-9_]*$/)
+              .max(40),
+            z.number().min(0).max(10_000),
+          )
+          .refine((value) => Object.keys(value).length > 0, {
+            message: "Add at least one measurement.",
+          }),
+      }),
+    )
+    .min(1)
+    .max(40),
+});
+
 @Controller("admin")
 export class AdminTaxonomyController {
   constructor(
@@ -567,5 +618,154 @@ export class AdminTaxonomyController {
         meta: null,
         requestId: req.id,
       }))(request, response);
+  }
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @ValidateRequest(attributeUpdate)
+  @Patch("/attributes/:id")
+  routeAttributeUpdate(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) =>
+      res.json({
+        data: await this.services.taxonomies.updateAttribute(
+          req.params.id,
+          req.body,
+          req.auth.user.id,
+          req,
+        ),
+        meta: null,
+        requestId: req.id,
+      }))(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @ValidateRequest(attributeValue)
+  @Post("/attributes/:id/values")
+  routeAttributeValueCreate(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) =>
+      res.status(201).json({
+        data: await this.services.taxonomies.createAttributeValue(
+          req.params.id,
+          req.body,
+          req.auth.user.id,
+          req,
+        ),
+        meta: null,
+        requestId: req.id,
+      }))(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @ValidateRequest(attributeValueUpdate)
+  @Patch("/attributes/:id/values/:valueId")
+  routeAttributeValueUpdate(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) =>
+      res.json({
+        data: await this.services.taxonomies.updateAttributeValue(
+          req.params.id,
+          req.params.valueId,
+          req.body,
+          req.auth.user.id,
+          req,
+        ),
+        meta: null,
+        requestId: req.id,
+      }))(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.view")
+  @Get("/size-charts")
+  routeSizeChartList(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) => {
+      const result = await this.services.taxonomies.listSizeCharts(req.query);
+      res.json({ ...result, requestId: req.id });
+    })(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @ValidateRequest(sizeChartSchema)
+  @Post("/size-charts")
+  routeSizeChartCreate(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) =>
+      res.status(201).json({
+        data: await this.services.taxonomies.createSizeChart(
+          req.body,
+          req.auth.user.id,
+          req,
+        ),
+        meta: null,
+        requestId: req.id,
+      }))(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.view")
+  @Get("/size-charts/:id")
+  routeSizeChartGet(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) =>
+      res.json({
+        data: await this.services.taxonomies.getSizeChart(req.params.id),
+        meta: null,
+        requestId: req.id,
+      }))(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @ValidateRequest(sizeChartSchema.and(z.object({ version })))
+  @Patch("/size-charts/:id")
+  routeSizeChartUpdate(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) =>
+      res.json({
+        data: await this.services.taxonomies.updateSizeChart(
+          req.params.id,
+          req.body,
+          req.auth.user.id,
+          req,
+        ),
+        meta: null,
+        requestId: req.id,
+      }))(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @Post("/size-charts/:id/archive")
+  routeSizeChartArchive(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) => {
+      await this.services.taxonomies.archiveSizeChart(
+        req.params.id,
+        req.auth.user.id,
+        req,
+      );
+      res.status(204).end();
+    })(request, response);
   }
 }

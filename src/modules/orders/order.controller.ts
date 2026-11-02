@@ -34,7 +34,26 @@ const address = z.object({
   division: z.string().trim().max(120).nullable().optional(),
   postcode: z.string().trim().max(20).nullable().optional(),
   landmark: z.string().trim().max(255).nullable().optional(),
+  thana: z.string().trim().max(120).nullable().optional(),
+  locationCode: z
+    .string()
+    .regex(/^(dist|thana)-[a-z0-9-]{2,50}$/)
+    .nullable()
+    .optional(),
 });
+const attribution = z
+  .object({
+    utmSource: z.string().max(200).optional(),
+    utmMedium: z.string().max(200).optional(),
+    utmCampaign: z.string().max(200).optional(),
+    utmContent: z.string().max(200).optional(),
+    utmTerm: z.string().max(200).optional(),
+    fbclid: z.string().max(500).optional(),
+    gclid: z.string().max(500).optional(),
+    landingPath: z.string().max(500).optional(),
+  })
+  .nullable()
+  .optional();
 const quoteSchema = z.object({
   customer,
   address,
@@ -43,6 +62,7 @@ const quoteSchema = z.object({
   paymentMethod: z.enum(["cod", "bkash"]).default("cod"),
   locale: z.enum(["en", "bn"]).default("en"),
   note: z.string().trim().max(1000).optional().default(""),
+  attribution,
 });
 const orderSchema = z.object({ quoteId: z.string().length(26) });
 
@@ -63,6 +83,7 @@ export class CheckoutController {
           req.cart.id,
           req.auth?.user.id,
           req.body,
+          req,
         ),
         meta: null,
         requestId: req.id,
@@ -98,17 +119,13 @@ export class OrderController {
   @ValidateRequest(
     z.object({
       reference: z.string().trim().min(5).max(40),
-      phone: z.string().min(10).max(30),
     }),
   )
   @Post("/track")
   route1(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) =>
       res.json({
-        data: await this.services.orders.trackOrder(
-          req.body.reference,
-          req.body.phone,
-        ),
+        data: await this.services.orders.trackOrder(req.body.reference),
         meta: null,
         requestId: req.id,
       }))(request, response);

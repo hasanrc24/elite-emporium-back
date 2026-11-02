@@ -9,7 +9,9 @@ const migrationsDirectory = fileURLToPath(
 );
 
 const migrator = new Umzug({
-  migrations: { glob: path.join(migrationsDirectory, "*.js") },
+  // Only numbered files are migrations; helper modules such as
+  // migration.types.js compile into the same directory and have no `up`.
+  migrations: { glob: path.join(migrationsDirectory, "[0-9]*.js") },
   context: sequelize.getQueryInterface(),
   storage: new SequelizeStorage({ sequelize }),
   logger,

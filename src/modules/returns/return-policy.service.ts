@@ -1,5 +1,6 @@
 import { Op } from "sequelize";
 import {
+  InventoryLevel,
   Order,
   OrderEvent,
   OrderItem,
@@ -175,6 +176,53 @@ export async function calculateReturnEligibility(
     now,
   });
   const deadline = window.deadline;
+  // Size exchange fast path (BR-RET-001): sibling variants of each product
+  // with current availability, so the customer can pick a replacement.
+  const productIds = [
+    ...new Set(
+      orderItems
+        .map((item: RuntimeValue) => item.variant?.productId)
+        .filter(Boolean),
+    ),
+  ];
+  const siblings: RuntimeValue = productIds.length
+    ? await ProductVariant.findAll({
+        where: {
+          productId: { [Op.in]: productIds },
+          active: true,
+          status: "active",
+        },
+        attributes: [
+          "id",
+          "productId",
+          "title",
+          "sku",
+          "attributes",
+          "stockPolicy",
+        ],
+        include: [{ model: InventoryLevel, as: "inventoryLevels" }],
+        order: [["createdAt", "ASC"]],
+        transaction,
+      })
+    : [];
+  const exchangeOptionsFor = (item: RuntimeValue) =>
+    siblings
+      .filter(
+        (variant: RuntimeValue) =>
+          variant.productId === item.variant?.productId &&
+          variant.id !== item.variantId,
+      )
+      .map((variant: RuntimeValue) => ({
+        variantId: variant.id,
+        title: variant.title,
+        attributes: variant.attributes || {},
+        available:
+          variant.stockPolicy !== "deny" ||
+          (variant.inventoryLevels || []).some(
+            (level: RuntimeValue) =>
+              Number(level.onHand) - Number(level.reserved) > 0,
+          ),
+      }));
   const globalReason = window.reason;
   const excluded = new Set(policy.value.excludedProductIds || []);
 
@@ -209,6 +257,7 @@ export async function calculateReturnEligibility(
       ),
       eligible: !reason,
       ineligibleReason: reason,
+      exchangeOptions: reason ? [] : exchangeOptionsFor(item),
     };
   });
   const eligible =

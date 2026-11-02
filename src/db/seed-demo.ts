@@ -36,7 +36,9 @@ async function put(
   try {
     row = await model.create({ id: id(key), ...values }, { transaction });
   } catch (error) {
-    throw new Error(`Failed creating ${model.name} (${key}): ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed creating ${model.name} (${key}): ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   counts[model.name] = (counts[model.name] || 0) + 1;
   return row;
@@ -212,20 +214,39 @@ try {
       );
       categories.push(category);
     }
-    const attribute = await put(M.Attribute, "size", {
-      key: "demo-size",
-      type: "select",
-      filterable: true,
-      variationCapable: true,
+    // Demo products ship with one illustration each; production keeps the
+    // default minimum (4) from BR-CAT-003.
+    const [catalogSetting] = await M.StoreSetting.findOrCreate({
+      where: { key: "catalog" },
+      defaults: {
+        id: id("setting:catalog"),
+        key: "catalog",
+        value: { minProductImages: 1 },
+        isPublic: false,
+      },
+      transaction,
     });
-    await translate(
-      M.AttributeTranslation,
-      "size",
-      "attributeId",
-      attribute.id,
-      { label: "Size" },
-      { label: "সাইজ" },
+    await catalogSetting.update(
+      {
+        value: {
+          ...(typeof catalogSetting.value === "string"
+            ? JSON.parse(catalogSetting.value)
+            : catalogSetting.value),
+          minProductImages: 1,
+        },
+      },
+      { transaction },
     );
+    // Demo products use the shared `size` attribute from the base seed, so
+    // storefront size filters and size-chart rules apply to them as well.
+    const attribute = await M.Attribute.findOne({
+      where: { key: "size" },
+      transaction,
+    });
+    if (!attribute)
+      throw new Error(
+        "Run npm run db:seed first to create the shared catalog attributes.",
+      );
     const sizes: DynamicModel[] = [];
     const chart = await put(M.SizeChart, "chart", {
       name: "Demo clothing sizes",
@@ -234,19 +255,11 @@ try {
       titleBn: "সাইজ গাইড",
     });
     for (const [i, size] of ["S", "M", "L"].entries()) {
-      const value = await put(M.AttributeValue, `size:${size}`, {
-        attributeId: attribute.id,
-        slug: size.toLowerCase(),
-        value: size,
-        displayOrder: i,
+      const value = await M.AttributeValue.findOne({
+        where: { attributeId: attribute.id, slug: size.toLowerCase() },
+        transaction,
       });
-      await translate(
-        M.AttributeValueTranslation,
-        `size:${size}`,
-        "valueId",
-        value.id,
-        { label: size },
-      );
+      if (!value) throw new Error(`Size value ${size} is missing.`);
       sizes.push(value);
       await put(M.SizeChartRow, `chart:${size}`, {
         chartId: chart.id,
@@ -344,8 +357,8 @@ try {
           productId: product.id,
           sku: `DEMO-${i + 1}-${size}`,
           title: `Size ${size}`,
-          attributes: { "demo-size": size },
-          combinationSignature: `demo-size:${sizes[s].id}`,
+          attributes: { size },
+          combinationSignature: `size:${size}`,
           regularPrice: 1400 + i * 250,
           costPrice: 800 + i * 100,
           salePrice: i === 0 ? 1250 : null,
@@ -354,7 +367,11 @@ try {
         });
         await sequelize.query(
           "INSERT IGNORE INTO variant_attribute_values (variantId, attributeId, valueId, createdAt, updatedAt) VALUES (?, ?, ?, NOW(3), NOW(3))",
-          { replacements: [variant.id, attribute.id, sizes[s].id], transaction, type: QueryTypes.INSERT },
+          {
+            replacements: [variant.id, attribute.id, sizes[s].id],
+            transaction,
+            type: QueryTypes.INSERT,
+          },
         );
         if (s === 1) variants.push(variant);
         const stock = i === 6 ? 0 : i === 5 ? 2 : 30;
@@ -662,13 +679,11 @@ try {
     });
     const blocks = [
       {
+        id: "demo-rich-text",
         type: "rich_text",
-        content: [
-          {
-            type: "paragraph",
-            text: "Demo editorial content for Elite Emporium. Explore comfortable fabrics and thoughtful everyday styling.",
-          },
-        ],
+        data: {
+          html: "<p>Demo editorial content for Elite Emporium. Explore comfortable fabrics and thoughtful everyday styling.</p>",
+        },
       },
     ];
     for (const slug of ["about", "size-guide", "delivery-guide"]) {
@@ -687,11 +702,26 @@ try {
         entityId: page.id,
         actorId: owner.id,
         version: 1,
+        // Same shape as content.service revisions so rollback can replay it.
         payload: {
           id: page.id,
           slug: page.slug,
+          template: "standard",
           status: page.status,
-          translations: [{ locale: "en", title: `Demo ${slug}`, blocks }],
+          publishAt: null,
+          version: 1,
+          translations: Object.fromEntries(
+            ["en", "bn"].map((locale) => [
+              locale,
+              {
+                title: `Demo ${slug.replaceAll("-", " ")}`,
+                excerpt: "Development sample page",
+                blocks,
+                seoTitle: "",
+                seoDescription: "",
+              },
+            ]),
+          ),
         },
         changeSummary: "Initial demo content",
         publishedAt: ago(3),
@@ -824,6 +854,18 @@ try {
       errorCode: "DEMO_DISABLED",
       responseExcerpt: "Simulated record; no HTTP request was made.",
     });
+    // Reviews are inserted directly, so refresh the per-product aggregates the
+    // moderation flow would normally maintain (approved reviews only).
+    await sequelize.query(
+      `UPDATE products p
+         LEFT JOIN (SELECT productId, COUNT(*) AS c, AVG(rating) AS a
+                      FROM reviews
+                     WHERE status = 'approved' AND deletedAt IS NULL
+                     GROUP BY productId) r ON r.productId = p.id
+          SET p.reviewCount = COALESCE(r.c, 0),
+              p.reviewAverage = ROUND(COALESCE(r.a, 0), 2)`,
+      { transaction },
+    );
     await put(M.AuditLog, "audit", {
       actorId: owner.id,
       action: "demo.seed",

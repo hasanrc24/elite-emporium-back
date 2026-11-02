@@ -27,12 +27,51 @@ export class DynamicModel extends Model {
   declare permissionOverrides: ReturnType<typeof JSON.parse>;
 }
 
+/**
+ * MariaDB stores JSON as LONGTEXT, so mysql2 hands back the serialized text
+ * instead of a value. Only objects/arrays are decoded: a JSON string scalar
+ * already arrives decoded on MySQL and must not be parsed a second time.
+ */
+export function decodeJsonValue(value: unknown) {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!/^[[{]/.test(text)) return value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return value;
+  }
+}
+
+const isJsonType = (type: RuntimeValue) =>
+  type === DataTypes.JSON || type instanceof DataTypes.JSON;
+
+function withJsonDecoding(attributes: ModelAttributes<DynamicModel>) {
+  const decoded: RuntimeValue = {};
+  for (const [name, definition] of Object.entries(attributes) as [
+    string,
+    RuntimeValue,
+  ][]) {
+    const column = isJsonType(definition) ? { type: definition } : definition;
+    decoded[name] =
+      isJsonType(column?.type) && !column.get
+        ? {
+            ...column,
+            get(this: DynamicModel) {
+              return decodeJsonValue(this.getDataValue(name));
+            },
+          }
+        : definition;
+  }
+  return decoded as ModelAttributes<DynamicModel>;
+}
+
 export function initializeModel(
   ModelClass: ModelStatic<DynamicModel>,
   attributes: ModelAttributes<DynamicModel>,
   options: Omit<InitOptions<DynamicModel>, "sequelize">,
 ) {
-  ModelClass.init(attributes, {
+  ModelClass.init(withJsonDecoding(attributes), {
     sequelize,
     freezeTableName: true,
     ...options,

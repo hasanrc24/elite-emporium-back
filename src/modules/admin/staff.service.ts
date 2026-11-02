@@ -10,6 +10,7 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId, randomToken } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { normalizeEmail, normalizePhone } from "../../lib/normalization.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
@@ -80,6 +81,86 @@ async function actorOwner(actorId: RuntimeValue, transaction: RuntimeValue) {
   return Boolean(
     actor?.roles?.some((role: RuntimeValue) => role.key === "owner"),
   );
+}
+
+/**
+ * Non-owners may only grant or manage access that they themselves hold, so a
+ * delegated roles.manage/staff.manage holder cannot escalate (directly or by
+ * taking over a more privileged account through a password reset).
+ */
+async function assertWithinActorPermissions(
+  actorId: RuntimeValue,
+  permissionKeys: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  if (!permissionKeys.length || (await actorOwner(actorId, transaction)))
+    return;
+  const actor: RuntimeValue = await User.findByPk(actorId, {
+    include: userAuthInclude,
+    transaction,
+  });
+  const held = new Set(actor ? effectivePermissionKeys(actor) : []);
+  if (permissionKeys.some((key: RuntimeValue) => !held.has(key)))
+    throw AppError.forbidden(
+      "You cannot grant or manage access beyond your own permissions.",
+    );
+}
+
+async function grantedPermissionKeys(
+  roleIds: RuntimeValue,
+  overrides: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  const roles: RuntimeValue = await Role.findAll({
+    where: { id: { [Op.in]: roleIds } },
+    include: [
+      {
+        model: Permission,
+        as: "permissions",
+        through: { attributes: [], where: { allow: true } },
+      },
+    ],
+    transaction,
+  });
+  const overridePermissions: RuntimeValue = overrides.length
+    ? await Permission.findAll({
+        where: {
+          id: {
+            [Op.in]: overrides.map(
+              (override: RuntimeValue) => override.permissionId,
+            ),
+          },
+        },
+        transaction,
+      })
+    : [];
+  const keyById = new Map(
+    overridePermissions.map((permission: RuntimeValue) => [
+      permission.id,
+      permission.key,
+    ]),
+  );
+  return effectivePermissionKeys({
+    roles,
+    permissionOverrides: overrides.map((override: RuntimeValue) => ({
+      allow: override.allow,
+      permission: { key: keyById.get(override.permissionId) },
+    })),
+  });
+}
+
+async function assertActorManagesTarget(
+  actorId: RuntimeValue,
+  targetId: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  const target: RuntimeValue = await loadStaff(targetId, transaction);
+  if (target)
+    await assertWithinActorPermissions(
+      actorId,
+      effectivePermissionKeys(target),
+      transaction,
+    );
 }
 
 async function lockOwnerInvariant(transaction: RuntimeValue) {
@@ -165,9 +246,9 @@ export async function listStaff(query: RuntimeValue) {
   if (query.status) where.status = query.status;
   if (query.search)
     where[Op.or] = [
-      { name: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } },
-      { phone: { [Op.like]: `%${String(query.search).slice(0, 30)}%` } },
-      { email: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } },
+      { name: { [Op.like]: likeContains(query.search, 100) } },
+      { phone: { [Op.like]: likeContains(query.search, 30) } },
+      { email: { [Op.like]: likeContains(query.search, 100) } },
     ];
   const roleWhere: RuntimeValue = {
     key: { [Op.ne]: "customer" },
@@ -252,6 +333,15 @@ export async function createStaff(
         throw AppError.forbidden(
           "Only an Owner can create another Owner account.",
         );
+      await assertWithinActorPermissions(
+        actorId,
+        await grantedPermissionKeys(
+          roles.map((role: RuntimeValue) => role.id),
+          [],
+          transaction,
+        ),
+        transaction,
+      );
       const duplicate: RuntimeValue = await User.findOne({
         where: {
           [Op.or]: [phone && { phone }, email && { email }].filter(Boolean),
@@ -338,6 +428,7 @@ export async function updateStaffProfile(
       actorId,
       transaction,
     });
+    await assertActorManagesTarget(actorId, user.id, transaction);
     const phone: RuntimeValue =
       payload.phone == null ? null : normalizePhone(payload.phone);
     const email: RuntimeValue =
@@ -436,6 +527,7 @@ export async function updateStaffAccess(
       actorId,
       transaction,
     });
+    await assertActorManagesTarget(actorId, user.id, transaction);
     const permissionIds: RuntimeValue = [
       ...new Set(
         payload.overrides.map(
@@ -459,6 +551,15 @@ export async function updateStaffAccess(
         "INVALID_PERMISSION",
         "One or more permissions do not exist.",
       );
+    await assertWithinActorPermissions(
+      actorId,
+      await grantedPermissionKeys(
+        roles.map((role: RuntimeValue) => role.id),
+        payload.overrides,
+        transaction,
+      ),
+      transaction,
+    );
     const before: RuntimeValue = staffDto(
       await loadStaff(user.id, transaction),
     );
@@ -515,6 +616,7 @@ export async function resetStaffPassword(
     });
     if (!user) throw AppError.notFound("Staff member not found.");
     await assertCanChangeOwner({ target: user, actorId, transaction });
+    await assertActorManagesTarget(actorId, user.id, transaction);
     user.passwordHash = await hashPassword(temporaryPassword);
     user.mustChangePassword = true;
     user.version += 1;
@@ -536,9 +638,32 @@ export async function resetStaffPassword(
   return { temporaryPassword, mustChangePassword: true };
 }
 
-export async function listStaffSessions(id: RuntimeValue) {
-  if (!(await User.count({ where: { id } })))
-    throw AppError.notFound("Staff member not found.");
+async function assertOwnerSessionsAccess(
+  targetId: RuntimeValue,
+  actorId: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  const ownerRole: RuntimeValue = await Role.findOne({
+    where: { key: "owner" },
+    transaction,
+  });
+  const target: RuntimeValue = await User.findByPk(targetId, { transaction });
+  if (!target) throw AppError.notFound("Staff member not found.");
+  if (
+    ownerRole &&
+    (await target.hasRole(ownerRole, { transaction })) &&
+    !(await actorOwner(actorId, transaction))
+  )
+    throw AppError.forbidden(
+      "Only an Owner can inspect or revoke an Owner's sessions.",
+    );
+}
+
+export async function listStaffSessions(
+  id: RuntimeValue,
+  actorId: RuntimeValue,
+) {
+  await assertOwnerSessionsAccess(id, actorId, null);
   const sessions: RuntimeValue = await AuthSession.findAll({
     where: { userId: id },
     order: [["lastUsedAt", "DESC"]],
@@ -561,6 +686,7 @@ export async function revokeStaffSession(
   request: RuntimeValue,
 ) {
   return sequelize.transaction(async (transaction: RuntimeValue) => {
+    await assertOwnerSessionsAccess(staffId, actorId, transaction);
     const session: RuntimeValue = await AuthSession.findOne({
       where: { id: sessionId, userId: staffId },
       transaction,
@@ -584,4 +710,4 @@ export async function revokeStaffSession(
   });
 }
 
-export { actorOwner };
+export { actorOwner, assertWithinActorPermissions };

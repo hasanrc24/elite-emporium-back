@@ -14,9 +14,11 @@ import { canonicalJson } from "../../lib/canonical-json.js";
 import { sha256 } from "../../lib/crypto.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
-import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { addDomainEvent } from "../events/outbox.service.js";
+import { queueLowStockAlert } from "../notifications/staff-notification.service.js";
 
 function levelDto(level: RuntimeValue) {
   return {
@@ -63,23 +65,24 @@ export async function listLevels(query: RuntimeValue) {
         "(`InventoryLevel`.`onHand` - `InventoryLevel`.`reserved`) <= `InventoryLevel`.`lowStockThreshold`",
       ),
     ];
-  const variantWhere: RuntimeValue = {};
-  if (query.search)
-    variantWhere[Op.or] = [
-      { sku: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } },
-      {
-        "$variant.product.translations.name$": {
-          [Op.like]: `%${String(query.search).slice(0, 100)}%`,
-        },
-      },
+  if (query.search) {
+    // Filter with EXISTS on the level row itself: nested `$...$` references
+    // break once Sequelize wraps the paginated query in a subquery.
+    const term: RuntimeValue = sequelize.escape(
+      likeContains(query.search, 100),
+    );
+    where[Op.and] = [
+      ...(where[Op.and] || []),
+      literal(
+        `EXISTS (SELECT 1 FROM product_variants pv LEFT JOIN product_translations pt ON pt.productId = pv.productId WHERE pv.id = \`InventoryLevel\`.\`variantId\` AND (pv.sku LIKE ${term} OR pt.name LIKE ${term}))`,
+      ),
     ];
-  const include: RuntimeValue = structuredClone([]);
+  }
+  const include: RuntimeValue = [];
   include.push({ model: StockLocation, as: "location" });
   include.push({
     model: ProductVariant,
     as: "variant",
-    where: variantWhere,
-    required: Boolean(Object.keys(variantWhere).length),
     include: [
       {
         model: Product,
@@ -228,8 +231,14 @@ export async function adjustInventory(
         "This adjustment would make on-hand inventory negative.",
       );
     level.onHand = nextOnHand;
-    if (payload.lowStockThreshold != null)
+    if (payload.lowStockThreshold != null) {
+      // An explicit threshold becomes this variant's own (most specific) one.
       level.lowStockThreshold = payload.lowStockThreshold;
+      await ProductVariant.update(
+        { lowStockThreshold: payload.lowStockThreshold },
+        { where: { id: variant.id }, transaction },
+      );
+    }
     level.version += 1;
     await level.save({ transaction });
     await InventoryMovement.create(
@@ -279,15 +288,11 @@ export async function adjustInventory(
       transaction,
     });
     if (nextOnHand - Number(level.reserved) <= Number(level.lowStockThreshold))
-      await queueNotification({
-        event: "inventory.low_stock",
-        channel: "dashboard",
-        recipient: "staff:inventory",
-        payload: {
-          message: `${variant.sku} is at or below its low-stock threshold.`,
-          sku: variant.sku,
-          available: nextOnHand - Number(level.reserved),
-        },
+      await queueLowStockAlert({
+        variantId: variant.id,
+        sku: variant.sku,
+        available: nextOnHand - Number(level.reserved),
+        threshold: Number(level.lowStockThreshold),
         transaction,
       });
     record.responseStatus = 200;

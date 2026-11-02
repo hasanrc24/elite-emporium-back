@@ -1,5 +1,6 @@
 import { Op } from "sequelize";
 import {
+  CheckoutQuote,
   CouponUsage,
   IdempotencyRecord,
   InventoryReservation,
@@ -18,6 +19,7 @@ import { money, moneyString } from "../../lib/money.js";
 import { validateOutboundUrl } from "../../lib/safe-url.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { notifyStaff } from "../notifications/staff-notification.service.js";
 import {
   createLocalOrderFromQuote,
   releaseOrderReservations,
@@ -90,7 +92,12 @@ export async function startBkashPayment(
       "IDEMPOTENCY_KEY_REQUIRED",
       "Idempotency-Key header is required.",
     );
-  const actorKey = userId || cartId;
+  // Same scoping as COD orders: the guest cart is converted after the first
+  // attempt, so retries are keyed to the cart that owns the quote.
+  const quoteOwner: RuntimeValue = userId
+    ? null
+    : await CheckoutQuote.findByPk(payload.quoteId, { attributes: ["cartId"] });
+  const actorKey = userId || quoteOwner?.cartId || cartId;
   const requestHash: RuntimeValue = sha256(canonicalJson(payload));
   const local: RuntimeValue = await sequelize.transaction(
     async (transaction: RuntimeValue) => {
@@ -396,20 +403,86 @@ async function finalizeSuccess(
       );
     const payment = attempt.payment;
     const order = payment.order;
+    // The order was already failed/cancelled (expiry job, cancel callback or
+    // staff) and its stock reservations and coupon usage were released. Record
+    // the captured money, but do not silently re-place an unreserved order.
+    const lateCapture = order.orderStatus !== "pending_payment";
     attempt.status = "succeeded";
     attempt.responseMetadata = redactBkashPayload(provider);
     await attempt.save({ transaction });
     payment.status = "paid";
     payment.providerTransactionId = provider.trxID;
-    payment.paidAt = provider.paymentExecuteTime
+    const executedAt = provider.paymentExecuteTime
       ? new Date(provider.paymentExecuteTime)
-      : new Date();
+      : null;
+    payment.paidAt =
+      executedAt && !Number.isNaN(executedAt.getTime())
+        ? executedAt
+        : new Date();
     payment.version += 1;
     payment.metadata = {
       ...payment.metadata,
       providerStatus: provider.transactionStatus,
+      ...(lateCapture ? { lateCapture: true } : {}),
     };
     await payment.save({ transaction });
+    if (lateCapture) {
+      const previousStatus = order.orderStatus;
+      order.paymentStatus = "paid";
+      order.version += 1;
+      await order.save({ transaction });
+      await OrderEvent.create(
+        {
+          id: newId(),
+          orderId: order.id,
+          type: "payment_paid_late",
+          fromStatus: previousStatus,
+          toStatus: previousStatus,
+          message:
+            "bKash payment was confirmed after the order closed. Refund or reinstate it manually.",
+          public: false,
+          metadata: { paymentId: payment.id },
+        },
+        { transaction },
+      );
+      await addDomainEvent({
+        topic: "payment.paid",
+        aggregateType: "payment",
+        aggregateId: payment.id,
+        payload: {
+          paymentId: payment.id,
+          orderId: order.id,
+          reference: order.reference,
+          amount: moneyString(payment.amount),
+          currency: payment.currency,
+          method: "bkash",
+          lateCapture: true,
+        },
+        transaction,
+      });
+      await notifyStaff("payments", {
+        event: "payment.late_capture",
+        title: `Late bKash payment on ${order.reference}`,
+        message: `৳${moneyString(payment.amount)} was captured after the order closed. Refund it or reinstate the order.`,
+        link: `/admin/orders/${order.id}`,
+        severity: "critical",
+        data: { orderId: order.id, paymentId: payment.id },
+        transaction,
+      });
+      await recordAudit({
+        action: "payment.bkash_confirmed_late",
+        resourceType: "payment",
+        resourceId: payment.id,
+        after: {
+          orderId: order.id,
+          orderStatus: previousStatus,
+          transactionId: provider.trxID,
+          amount: moneyString(payment.amount),
+        },
+        transaction,
+      });
+      return publicAttempt(attempt);
+    }
     order.paymentStatus = "paid";
     order.orderStatus = "placed";
     order.placedAt = new Date();
@@ -467,6 +540,16 @@ async function finalizeSuccess(
       },
       transaction,
     });
+    // A paid bKash order is only "placed" now, so this is its new-order alert.
+    await notifyStaff("orders", {
+      event: "order.placed",
+      title: `New paid order ${order.reference}`,
+      message: `${order.customerName} · ৳${moneyString(payment.amount)} paid by bKash.`,
+      link: `/admin/orders/${order.id}`,
+      severity: "success",
+      data: { orderId: order.id, orderReference: order.reference },
+      transaction,
+    });
     await recordAudit({
       action: "payment.bkash_confirmed",
       resourceType: "payment",
@@ -486,6 +569,7 @@ async function finalizeFailure(
   attemptId: RuntimeValue,
   status: RuntimeValue,
   provider: RuntimeValue = {},
+  unverified: boolean = false,
 ) {
   return sequelize.transaction(async (transaction: RuntimeValue) => {
     const attempt: RuntimeValue = await loadAttempt(
@@ -494,18 +578,29 @@ async function finalizeFailure(
       transaction.LOCK.UPDATE,
     );
     if (!attempt) throw AppError.notFound("Payment attempt not found.");
-    if (attempt.status === "succeeded") return publicAttempt(attempt);
+    // Release exactly once: an already failed/cancelled attempt was finalized.
+    if (["succeeded", "failed", "cancelled"].includes(attempt.status))
+      return publicAttempt(attempt);
+    // An unverified browser callback must not fail an attempt whose execute
+    // call is in flight; the provider query decides that outcome.
+    if (unverified && attempt.status === "executing")
+      return publicAttempt(attempt);
     const cancelled = status === "cancelled";
+    const order = attempt.payment.order;
+    const previousOrderStatus = order.orderStatus;
     attempt.status = cancelled ? "cancelled" : "failed";
     attempt.callbackState = redactBkashPayload(provider);
     await attempt.save({ transaction });
     attempt.payment.status = cancelled ? "cancelled" : "failed";
     attempt.payment[cancelled ? "cancelledAt" : "failedAt"] = new Date();
-    attempt.payment.order.orderStatus = cancelled ? "cancelled" : "failed";
-    attempt.payment.order.paymentStatus = cancelled ? "cancelled" : "failed";
-    if (cancelled) attempt.payment.order.cancelledAt = new Date();
     await attempt.payment.save({ transaction });
-    await attempt.payment.order.save({ transaction });
+    if (["pending_payment", "failed"].includes(order.orderStatus)) {
+      order.orderStatus = cancelled ? "cancelled" : "failed";
+      order.paymentStatus = cancelled ? "cancelled" : "failed";
+      if (cancelled) order.cancelledAt = new Date();
+      order.version += 1;
+      await order.save({ transaction });
+    }
     await releaseOrderReservations(
       attempt.payment.order.id,
       cancelled ? "payment_cancelled" : "payment_failed",
@@ -525,8 +620,8 @@ async function finalizeFailure(
         id: newId(),
         orderId: attempt.payment.order.id,
         type: cancelled ? "payment_cancelled" : "payment_failed",
-        fromStatus: "pending_payment",
-        toStatus: attempt.payment.order.orderStatus,
+        fromStatus: previousOrderStatus,
+        toStatus: order.orderStatus,
         message: cancelled
           ? "bKash payment was cancelled."
           : "bKash payment failed.",
@@ -538,23 +633,25 @@ async function finalizeFailure(
   });
 }
 
-export async function recoverBkashPayment({
-  attemptId,
-  recoveryToken,
-  callbackStatus = null,
-}: RuntimeValue) {
-  let attempt: RuntimeValue = await loadAttempt(attemptId);
-  if (!attempt || attempt.recoveryTokenHash !== sha256(recoveryToken))
-    throw AppError.notFound("Payment attempt not found.");
-  if (["succeeded", "failed", "cancelled", "expired"].includes(attempt.status))
-    return publicAttempt(attempt);
+/**
+ * Settles an attempt after a browser callback or recovery poll. The callback
+ * status is never proof of payment: success is only recorded from a verified
+ * execute/query response, and a cancel/failure callback cannot fail an attempt
+ * whose execute call is in flight.
+ */
+async function settleAttempt(
+  attempt: RuntimeValue,
+  callbackStatus: RuntimeValue,
+) {
   if (callbackStatus === "cancel" || callbackStatus === "failure")
     return finalizeFailure(
       attempt.id,
       callbackStatus === "cancel" ? "cancelled" : "failed",
       { callbackStatus },
+      true,
     );
   if (!attempt.providerPaymentId) return publicAttempt(attempt);
+  let executeRejected = false;
   if (callbackStatus === "success" && attempt.status === "redirected") {
     const claimed: RuntimeValue = await PaymentAttempt.update(
       { status: "executing", callbackState: { callbackStatus: "success" } },
@@ -568,14 +665,10 @@ export async function recoverBkashPayment({
         if (executed.transactionStatus === "Completed")
           return finalizeSuccess(attempt.id, executed);
       } catch (error: RuntimeValue) {
-        if (!(error instanceof BkashProviderError) || !error.uncertain)
-          throw error instanceof BkashProviderError
-            ? new AppError(
-                error.retryable ? 503 : 422,
-                error.code,
-                error.message,
-              )
-            : error;
+        if (!(error instanceof BkashProviderError)) throw error;
+        // A definite rejection must not leave the attempt stuck in
+        // "executing"; the authoritative query below decides the outcome.
+        executeRejected = !error.uncertain && !error.retryable;
       }
     }
   }
@@ -591,10 +684,25 @@ export async function recoverBkashPayment({
     return finalizeSuccess(attempt.id, queried);
   if (["Cancelled", "Canceled"].includes(queried.transactionStatus))
     return finalizeFailure(attempt.id, "cancelled", queried);
-  if (["Failed", "Expired"].includes(queried.transactionStatus))
+  if (
+    executeRejected ||
+    ["Failed", "Expired"].includes(queried.transactionStatus)
+  )
     return finalizeFailure(attempt.id, "failed", queried);
-  attempt = await loadAttempt(attempt.id);
-  return publicAttempt(attempt);
+  return publicAttempt(await loadAttempt(attempt.id));
+}
+
+export async function recoverBkashPayment({
+  attemptId,
+  recoveryToken,
+  callbackStatus = null,
+}: RuntimeValue) {
+  const attempt: RuntimeValue = await loadAttempt(attemptId);
+  if (!attempt || attempt.recoveryTokenHash !== sha256(recoveryToken))
+    throw AppError.notFound("Payment attempt not found.");
+  if (["succeeded", "failed", "cancelled", "expired"].includes(attempt.status))
+    return publicAttempt(attempt);
+  return settleAttempt(attempt, callbackStatus);
 }
 
 export async function processBkashCallback(
@@ -606,43 +714,6 @@ export async function processBkashCallback(
     include: attemptInclude,
   });
   if (!attempt) throw AppError.notFound("Payment attempt not found.");
-  if (callbackStatus === "cancel" || callbackStatus === "failure")
-    return finalizeFailure(
-      attempt.id,
-      callbackStatus === "cancel" ? "cancelled" : "failed",
-      { callbackStatus },
-    );
-  if (callbackStatus === "success") {
-    const claimed: RuntimeValue = await PaymentAttempt.update(
-      { status: "executing", callbackState: { callbackStatus: "success" } },
-      { where: { id: attempt.id, status: "redirected" } },
-    );
-    if (claimed[0]) {
-      try {
-        const executed: RuntimeValue = await executeBkashPayment(paymentId);
-        if (executed.transactionStatus === "Completed")
-          return finalizeSuccess(attempt.id, executed);
-      } catch (error: RuntimeValue) {
-        if (!(error instanceof BkashProviderError) || !error.uncertain)
-          throw error instanceof BkashProviderError
-            ? new AppError(
-                error.retryable ? 503 : 422,
-                error.code,
-                error.message,
-              )
-            : error;
-      }
-    }
-  }
-  let provider;
-  try {
-    provider = await queryBkashPayment(paymentId);
-  } catch (error: RuntimeValue) {
-    throw error instanceof BkashProviderError
-      ? new AppError(error.retryable ? 503 : 422, error.code, error.message)
-      : error;
-  }
-  if (provider.transactionStatus === "Completed")
-    return finalizeSuccess(attempt.id, provider);
-  return publicAttempt(await loadAttempt(attempt.id));
+  if (attempt.status === "succeeded") return publicAttempt(attempt);
+  return settleAttempt(attempt, callbackStatus);
 }

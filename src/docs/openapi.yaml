@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Elite Emporium API
-  version: 0.1.0
+  version: 0.2.0
   description: Authoritative API for the bilingual Elite Emporium storefront and administration console.
 servers:
   - url: /api/v1
@@ -78,6 +78,10 @@ paths:
   /checkout/quote: { $ref: "#/components/pathItems/PublicPost" }
   /orders: { $ref: "#/components/pathItems/AuthGetPublicPost" }
   /orders/track: { $ref: "#/components/pathItems/PublicPost" }
+  /orders/manual-payment: { $ref: "#/components/pathItems/PublicPost" }
+  /orders/confirmation: { $ref: "#/components/pathItems/PublicPost" }
+  /orders/confirmation/lookup: { $ref: "#/components/pathItems/PublicPost" }
+  /locations: { $ref: "#/components/pathItems/PublicGet" }
   /orders/{id}: { parameters: *idParam, $ref: "#/components/pathItems/AuthGet" }
   /orders/{id}/cancel:
     { parameters: *idParam, $ref: "#/components/pathItems/AuthPost" }
@@ -114,6 +118,8 @@ paths:
   /admin/dashboard: { $ref: "#/components/pathItems/AdminGet" }
   /admin/products: { $ref: "#/components/pathItems/AdminGetPost" }
   /admin/products/bulk: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/products/export: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/products/import: { $ref: "#/components/pathItems/AdminPost" }
   /admin/products/{id}:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
   /admin/products/{id}/publication:
@@ -160,6 +166,24 @@ paths:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/brands/reorder: { $ref: "#/components/pathItems/AdminPost" }
   /admin/attributes: *adminListCreate
+  /admin/attributes/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/attributes/{id}/values:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/attributes/{id}/values/{valueId}:
+    {
+      parameters:
+        [
+          { $ref: "#/components/parameters/Id" },
+          { name: valueId, in: path, required: true, schema: { type: string } },
+        ],
+      $ref: "#/components/pathItems/AdminPatch",
+    }
+  /admin/size-charts: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/size-charts/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminGetPatch" }
+  /admin/size-charts/{id}/archive:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/attributes/{id}/usage:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
   /admin/inventory/levels: { $ref: "#/components/pathItems/AdminGet" }
@@ -171,6 +195,21 @@ paths:
   /admin/inventory/locations/{id}:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
   /admin/orders: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/orders/{id}/tags:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/order-documents: { $ref: "#/components/pathItems/AdminPost" }
+  /admin/confirmations: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/confirmations/actions/bulk-confirm:
+    { $ref: "#/components/pathItems/AdminPost" }
+  /admin/confirmations/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/risk/blocklist: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/risk/blocklist/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatch" }
+  /admin/search/synonyms: { $ref: "#/components/pathItems/AdminGetPost" }
+  /admin/search/synonyms/{id}:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPatchDelete" }
+  /admin/search/misses: { $ref: "#/components/pathItems/AdminGet" }
   /admin/orders/{id}:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
   /admin/orders/{id}/transitions:
@@ -180,6 +219,11 @@ paths:
   /admin/orders/{id}/notes:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/payments: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/manual-payments: { $ref: "#/components/pathItems/AdminGet" }
+  /admin/manual-payments/{id}/verify:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/manual-payments/{id}/reject:
+    { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
   /admin/payments/{id}:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
   /admin/payments/{id}/cod-collection:
@@ -309,6 +353,145 @@ paths:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminGet" }
   /admin/notifications/outbox/{id}/retry:
     { parameters: *idParam, $ref: "#/components/pathItems/AdminPost" }
+  /admin/inbox:
+    get:
+      tags: [Administration]
+      summary: List the signed-in staff member's dashboard notifications
+      description: >-
+        Newest first. Only alerts whose required permission the caller still
+        holds are returned. `meta.unreadCount` counts every visible unread alert.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [all, unread], default: all }
+        - name: category
+          in: query
+          schema: { type: string, pattern: "^[a-z_]{1,40}$", example: orders }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: One page of notifications.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta, requestId]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/StaffNotification" }
+                  meta:
+                    type: object
+                    required: [page, pageSize, total, pageCount, unreadCount]
+                    properties:
+                      page: { type: integer }
+                      pageSize: { type: integer }
+                      total: { type: integer }
+                      pageCount: { type: integer }
+                      unreadCount: { type: integer }
+                  requestId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /admin/inbox/summary:
+    get:
+      tags: [Administration]
+      summary: Unread count and newest unread alert for the admin bell
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Inbox summary. Sent with `Cache-Control no-store`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, requestId]
+                properties:
+                  data:
+                    type: object
+                    required: [unreadCount, latest]
+                    properties:
+                      unreadCount: { type: integer, example: 3 }
+                      latest:
+                        oneOf:
+                          - { $ref: "#/components/schemas/StaffNotification" }
+                          - { type: "null" }
+                  meta: { $ref: "#/components/schemas/Meta" }
+                  requestId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/inbox/read-all:
+    post:
+      tags: [Administration]
+      summary: Mark the caller's unread notifications as read
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                before:
+                  type: string
+                  format: date-time
+                  description: Only alerts that occurred at or before this time; defaults to now.
+      responses:
+        "200":
+          description: Number of notifications marked read.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, requestId]
+                properties:
+                  data:
+                    type: object
+                    required: [updated]
+                    properties: { updated: { type: integer } }
+                  meta: { $ref: "#/components/schemas/Meta" }
+                  requestId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /admin/inbox/{id}:
+    parameters: *idParam
+    patch:
+      tags: [Administration]
+      summary: Mark one of the caller's notifications read or unread
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [read]
+              properties: { read: { type: boolean } }
+      responses:
+        "200":
+          description: The updated notification.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, requestId]
+                properties:
+                  data: { $ref: "#/components/schemas/StaffNotification" }
+                  meta: { $ref: "#/components/schemas/Meta" }
+                  requestId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: Not found or not visible to the caller.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "422": { $ref: "#/components/responses/ValidationError" }
   /admin/reports/{report}:
     parameters:
       [{ name: report, in: path, required: true, schema: { type: string } }]
@@ -439,6 +622,38 @@ components:
               }
         requestId: { type: string, example: 01JREQUEST00000000000000000 }
     WritePayload: { type: object, additionalProperties: true }
+    StaffNotification:
+      type: object
+      required:
+        [
+          id,
+          event,
+          category,
+          severity,
+          title,
+          body,
+          link,
+          occurrences,
+          occurredAt,
+          readAt,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Ulid" }
+        event: { type: string, example: order.placed }
+        category: { type: string, example: order }
+        severity: { type: string, enum: [info, success, warning, critical] }
+        title: { type: string, example: New order EE-2026-000123 }
+        body: { type: [string, "null"] }
+        link:
+          type: [string, "null"]
+          description: Same-origin admin path to act on the alert.
+          example: /admin/orders/01J00000000000000000000000
+        occurrences:
+          type: integer
+          minimum: 1
+          description: Repeats collapsed into this unread alert (e.g. low stock).
+        occurredAt: { type: string, format: date-time }
+        readAt: { type: [string, "null"], format: date-time }
   requestBodies:
     JsonWrite:
       required: true

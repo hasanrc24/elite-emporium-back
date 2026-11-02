@@ -4,6 +4,7 @@ import {
   InventoryLevel,
   InventoryMovement,
   InventoryReservation,
+  OrderConfirmation,
   IdempotencyRecord,
   Order,
   OrderAddress,
@@ -22,6 +23,7 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { orderReference } from "../../lib/ids.js";
 import { canonicalJson } from "../../lib/canonical-json.js";
 import { sha256 } from "../../lib/crypto.js";
@@ -31,6 +33,8 @@ import { normalizeEmail, normalizePhone } from "../../lib/normalization.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { queueLowStockAlert } from "../notifications/staff-notification.service.js";
+import { crossedLowStock } from "../notifications/staff-notification.rules.js";
 import { orderDto, releaseOrderReservations } from "./order.service.js";
 
 const detailInclude: RuntimeValue = [
@@ -52,6 +56,11 @@ const detailInclude: RuntimeValue = [
     include: [{ model: PaymentAttempt, as: "attempts" }],
   },
   { model: Shipment, as: "shipments" },
+  {
+    model: OrderConfirmation,
+    as: "confirmations",
+    include: [{ model: User, as: "actor", attributes: ["id", "name"] }],
+  },
 ];
 
 function effectiveVariantPrice(
@@ -64,6 +73,134 @@ function effectiveVariantPrice(
     (!variant.saleEndsAt || variant.saleEndsAt > now) &&
     money(variant.salePrice).lessThan(variant.regularPrice);
   return saleIsCurrent ? money(variant.salePrice) : money(variant.regularPrice);
+}
+
+async function reserveManualOrderLines(
+  order: RuntimeValue,
+  lines: RuntimeValue,
+  actorId: RuntimeValue,
+  correlationKey: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  const now = new Date();
+  for (const line of lines) {
+    let needed = line.quantity;
+    const levels: RuntimeValue = await InventoryLevel.findAll({
+      where: { variantId: line.variant.id },
+      order: [["locationId", "ASC"]],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    for (const level of levels) {
+      const available = Number(level.onHand) - Number(level.reserved);
+      const quantity: RuntimeValue = Math.min(needed, Math.max(0, available));
+      if (!quantity) continue;
+      await level.update(
+        {
+          reserved: Number(level.reserved) + quantity,
+          version: Number(level.version) + 1,
+        },
+        { transaction },
+      );
+      if (
+        crossedLowStock(
+          available,
+          available - quantity,
+          Number(level.lowStockThreshold),
+        )
+      )
+        await queueLowStockAlert({
+          variantId: line.variant.id,
+          sku: line.variant.sku,
+          available: available - quantity,
+          threshold: Number(level.lowStockThreshold),
+          transaction,
+        });
+      await InventoryReservation.create(
+        {
+          id: newId(),
+          variantId: line.variant.id,
+          locationId: level.locationId,
+          orderId: order.id,
+          quantity,
+          status: "converted",
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+          convertedAt: now,
+          idempotencyKey: correlationKey,
+        },
+        { transaction },
+      );
+      await InventoryMovement.create(
+        {
+          id: newId(),
+          variantId: line.variant.id,
+          locationId: level.locationId,
+          orderId: order.id,
+          actorId,
+          quantityDelta: 0,
+          reservedDelta: quantity,
+          onHandBefore: Number(level.onHand),
+          balanceAfter: Number(level.onHand),
+          reservedAfter: Number(level.reserved),
+          reason: "manual_order_reserved",
+          correlationId: correlationKey,
+        },
+        { transaction },
+      );
+      needed -= quantity;
+      if (!needed) break;
+    }
+    if (needed && line.variant.stockPolicy === "deny")
+      throw AppError.unprocessable(
+        "INSUFFICIENT_STOCK",
+        `Insufficient stock for ${line.variant.sku}.`,
+      );
+  }
+}
+
+/** Reserves stock for a draft (manual or exchange replacement) being placed. */
+async function reserveDraftOrderInventory(
+  order: RuntimeValue,
+  actorId: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  const items: RuntimeValue = await OrderItem.findAll({
+    where: { orderId: order.id },
+    order: [["variantId", "ASC"]],
+    transaction,
+  });
+  const variants: RuntimeValue = await ProductVariant.findAll({
+    where: {
+      id: {
+        [Op.in]: [
+          ...new Set(items.map((item: RuntimeValue) => item.variantId)),
+        ],
+      },
+    },
+    order: [["id", "ASC"]],
+    paranoid: false,
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  const byId = new Map(
+    variants.map((variant: RuntimeValue) => [variant.id, variant]),
+  );
+  const lines: RuntimeValue = items.map((item: RuntimeValue) => {
+    const variant: RuntimeValue = byId.get(item.variantId);
+    if (!variant)
+      throw AppError.unprocessable(
+        "INVALID_VARIANT",
+        "One or more order variants no longer exist.",
+      );
+    return { variant, quantity: Number(item.quantity) };
+  });
+  await reserveManualOrderLines(
+    order,
+    lines,
+    actorId,
+    `place:${order.id}`,
+    transaction,
+  );
 }
 
 export async function createManualOrder(
@@ -211,6 +348,8 @@ export async function createManualOrder(
         userId: customer?.id || null,
         reference: orderReference(),
         source: "admin",
+        channel: payload.channel || "phone",
+        tags: payload.tags?.length ? payload.tags : null,
         orderStatus: payload.status,
         paymentStatus: payload.status === "draft" ? "unpaid" : "unpaid",
         fulfillmentStatus: "unfulfilled",
@@ -323,70 +462,14 @@ export async function createManualOrder(
       },
       { transaction },
     );
-    if (payload.status === "placed") {
-      for (const line of lines) {
-        let needed = line.quantity;
-        const levels: RuntimeValue = await InventoryLevel.findAll({
-          where: { variantId: line.variant.id },
-          order: [["locationId", "ASC"]],
-          transaction,
-          lock: transaction.LOCK.UPDATE,
-        });
-        for (const level of levels) {
-          const available = Number(level.onHand) - Number(level.reserved);
-          const quantity: RuntimeValue = Math.min(
-            needed,
-            Math.max(0, available),
-          );
-          if (!quantity) continue;
-          await level.update(
-            {
-              reserved: Number(level.reserved) + quantity,
-              version: Number(level.version) + 1,
-            },
-            { transaction },
-          );
-          await InventoryReservation.create(
-            {
-              id: newId(),
-              variantId: line.variant.id,
-              locationId: level.locationId,
-              orderId: order.id,
-              quantity,
-              status: "converted",
-              expiresAt: new Date(Date.now() + 365 * 86400000),
-              convertedAt: now,
-              idempotencyKey,
-            },
-            { transaction },
-          );
-          await InventoryMovement.create(
-            {
-              id: newId(),
-              variantId: line.variant.id,
-              locationId: level.locationId,
-              orderId: order.id,
-              actorId,
-              quantityDelta: 0,
-              reservedDelta: quantity,
-              onHandBefore: Number(level.onHand),
-              balanceAfter: Number(level.onHand),
-              reservedAfter: Number(level.reserved),
-              reason: "manual_order_reserved",
-              correlationId: idempotencyKey,
-            },
-            { transaction },
-          );
-          needed -= quantity;
-          if (!needed) break;
-        }
-        if (needed && line.variant.stockPolicy === "deny")
-          throw AppError.unprocessable(
-            "INSUFFICIENT_STOCK",
-            `Insufficient stock for ${line.variant.sku}.`,
-          );
-      }
-    }
+    if (payload.status === "placed")
+      await reserveManualOrderLines(
+        order,
+        lines,
+        actorId,
+        idempotencyKey,
+        transaction,
+      );
     await OrderEvent.create(
       {
         id: newId(),
@@ -436,19 +519,34 @@ export async function listAdminOrders(query: RuntimeValue) {
     where.fulfillmentStatus = query.fulfillmentStatus;
   if (query.paymentMethod) where.paymentMethod = query.paymentMethod;
   if (query.source) where.source = query.source;
+  if (query.channel) where.channel = query.channel;
+  if (query.confirmationStatus)
+    where.confirmationStatus = query.confirmationStatus;
+  if (query.riskLevel) where.riskLevel = query.riskLevel;
+  if (typeof query.tag === "string" && /^[a-z0-9-]{1,40}$/.test(query.tag))
+    where[Op.and] = [
+      sequelize.where(
+        sequelize.fn(
+          "JSON_CONTAINS",
+          sequelize.col("tags"),
+          JSON.stringify(query.tag),
+        ),
+        1,
+      ),
+    ];
   if (query.deliveryCode) where.deliveryCode = query.deliveryCode;
   Object.assign(where, dateRangeWhere(query));
   if (query.search)
     where[Op.or] = [
-      { reference: { [Op.like]: `%${String(query.search).slice(0, 80)}%` } },
+      { reference: { [Op.like]: likeContains(query.search, 80) } },
       {
-        customerPhone: { [Op.like]: `%${String(query.search).slice(0, 30)}%` },
+        customerPhone: { [Op.like]: likeContains(query.search, 30) },
       },
       {
-        customerEmail: { [Op.like]: `%${String(query.search).slice(0, 100)}%` },
+        customerEmail: { [Op.like]: likeContains(query.search, 100) },
       },
       {
-        customerName: { [Op.like]: `%${String(query.search).slice(0, 100)}%` },
+        customerName: { [Op.like]: likeContains(query.search, 100) },
       },
     ];
   const result: RuntimeValue = await Order.findAndCountAll({
@@ -484,13 +582,35 @@ export async function getAdminOrder(id: RuntimeValue) {
       createdAt: note.createdAt,
     })),
     shipments: order.shipments,
-    metadata: order.metadata,
+    confirmations: (order.confirmations || []).map((row: RuntimeValue) => ({
+      id: row.id,
+      method: row.method,
+      outcome: row.outcome,
+      note: row.note,
+      callbackAt: row.callbackAt,
+      actor: row.actor,
+      createdAt: row.createdAt,
+    })),
+    metadata: adminMetadata(order.metadata),
   };
 }
 
+/** Order metadata without secrets such as the confirmation link hash. */
+function adminMetadata(metadata: RuntimeValue) {
+  if (!metadata) return metadata;
+  const { confirmationLink, ...rest } = metadata;
+  return {
+    ...rest,
+    confirmationLinkIssued: Boolean(confirmationLink),
+  };
+}
+
+// pending_payment -> placed happens only through verified payment
+// finalization; a manual jump would place an unpaid order whose stock
+// reservations are still expiring.
 const orderTransitions: RuntimeValue = {
-  draft: ["pending_payment", "placed", "cancelled"],
-  pending_payment: ["placed", "failed", "cancelled"],
+  draft: ["placed", "cancelled"],
+  pending_payment: ["failed", "cancelled"],
   placed: ["confirmed", "processing", "cancelled"],
   confirmed: ["processing", "cancelled"],
   processing: ["completed", "cancelled"],
@@ -502,8 +622,9 @@ const fulfillmentTransitions: RuntimeValue = {
   unfulfilled: ["processing", "packed"],
   processing: ["packed"],
   packed: ["shipped"],
-  shipped: ["out_for_delivery", "delivered"],
-  out_for_delivery: ["delivered"],
+  shipped: ["out_for_delivery", "delivered", "returned_to_origin"],
+  out_for_delivery: ["delivered", "returned_to_origin"],
+  returned_to_origin: [],
   delivered: ["partially_returned", "returned"],
   partially_returned: ["returned"],
   returned: [],
@@ -580,6 +701,76 @@ async function consumeReservations(
   );
 }
 
+/**
+ * A parcel the courier brought back (refused/unreachable) returns its stock
+ * and closes the order. Items were consumed at packing, so on-hand goes back
+ * up at the same locations with an RTO ledger entry.
+ */
+async function restockReturnedToOrigin(
+  order: RuntimeValue,
+  actorId: RuntimeValue,
+  reason: RuntimeValue,
+  transaction: RuntimeValue,
+) {
+  const reservations: RuntimeValue = await InventoryReservation.findAll({
+    where: { orderId: order.id, status: "consumed" },
+    order: [
+      ["variantId", "ASC"],
+      ["locationId", "ASC"],
+    ],
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  for (const reservation of reservations) {
+    const level: RuntimeValue = await InventoryLevel.findOne({
+      where: {
+        variantId: reservation.variantId,
+        locationId: reservation.locationId,
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!level) continue;
+    const before = Number(level.onHand);
+    level.onHand = before + Number(reservation.quantity);
+    level.version += 1;
+    await level.save({ transaction });
+    await InventoryMovement.create(
+      {
+        id: newId(),
+        variantId: reservation.variantId,
+        locationId: reservation.locationId,
+        orderId: order.id,
+        actorId,
+        quantityDelta: Number(reservation.quantity),
+        reservedDelta: 0,
+        onHandBefore: before,
+        balanceAfter: Number(level.onHand),
+        reservedAfter: Number(level.reserved),
+        reason: "return_to_origin_restock",
+        correlationId: `rto:${order.id}`,
+      },
+      { transaction },
+    );
+  }
+  await OrderItem.update(
+    { returnedQuantity: col("quantity") },
+    { where: { orderId: order.id }, transaction },
+  );
+  await CouponUsage.update(
+    { status: "reversed" },
+    { where: { orderId: order.id, status: "consumed" }, transaction },
+  );
+  await Payment.update(
+    { status: "cancelled", cancelledAt: new Date() },
+    { where: { orderId: order.id, status: "unpaid" }, transaction },
+  );
+  if (order.paymentStatus === "unpaid") order.paymentStatus = "cancelled";
+  order.orderStatus = "cancelled";
+  order.cancellationReason = `Returned to origin: ${String(reason).slice(0, 220)}`;
+  order.cancelledAt = new Date();
+}
+
 export async function transitionOrder(
   id: RuntimeValue,
   payload: RuntimeValue,
@@ -623,9 +814,65 @@ export async function transitionOrder(
           "USE_CANCEL_ACTION",
           "Use the cancel action so inventory and promotions are reversed safely.",
         );
+      if (payload.status === "confirmed") {
+        if (!["not_required", "confirmed"].includes(order.confirmationStatus))
+          await OrderConfirmation.create(
+            {
+              id: newId(),
+              orderId: order.id,
+              actorId,
+              method: "manual",
+              outcome: "confirmed",
+              note: payload.reason,
+            },
+            { transaction },
+          );
+        order.confirmationStatus = "confirmed";
+        order.confirmedAt = new Date();
+        order.nextConfirmationAt = null;
+      }
+      if (order.orderStatus === "draft" && payload.status === "placed") {
+        await reserveDraftOrderInventory(order, actorId, transaction);
+        order.placedAt = new Date();
+      }
+      if (
+        order.orderStatus === "pending_payment" &&
+        payload.status === "failed"
+      ) {
+        await releaseOrderReservations(
+          order.id,
+          "payment_failed",
+          transaction,
+          actorId,
+          ["active"],
+        );
+        await CouponUsage.update(
+          { status: "released" },
+          { where: { orderId: order.id, status: "reserved" }, transaction },
+        );
+        await Payment.update(
+          { status: "failed", failedAt: new Date() },
+          { where: { orderId: order.id, status: "pending" }, transaction },
+        );
+        order.paymentStatus = "failed";
+      }
       order.orderStatus = payload.status;
       if (payload.status === "completed") order.completedAt = new Date();
     } else {
+      // Fulfilment may only progress on a live order (not a draft, unpaid
+      // bKash, cancelled or failed one); return states also apply after
+      // completion.
+      if (
+        !["placed", "confirmed", "processing"].includes(order.orderStatus) &&
+        !(
+          order.orderStatus === "completed" &&
+          ["partially_returned", "returned"].includes(payload.status)
+        )
+      )
+        throw AppError.conflict(
+          "INVALID_FULFILLMENT_TRANSITION",
+          `Fulfillment cannot change while the order is ${order.orderStatus}.`,
+        );
       if (
         !fulfillmentTransitions[order.fulfillmentStatus]?.includes(
           payload.status,
@@ -635,8 +882,25 @@ export async function transitionOrder(
           "INVALID_FULFILLMENT_TRANSITION",
           `Fulfillment cannot move from ${order.fulfillmentStatus} to ${payload.status}.`,
         );
+      if (
+        ["pending", "no_answer", "call_back", "wrong_number"].includes(
+          order.confirmationStatus,
+        ) &&
+        ["processing", "packed"].includes(payload.status)
+      )
+        throw AppError.conflict(
+          "ORDER_NOT_CONFIRMED",
+          "Confirm this order with the customer before packing it.",
+        );
       if (payload.status === "packed")
         await consumeReservations(order, actorId, transaction);
+      if (payload.status === "returned_to_origin")
+        await restockReturnedToOrigin(
+          order,
+          actorId,
+          payload.reason,
+          transaction,
+        );
       order.fulfillmentStatus = payload.status;
       if (
         ["processing", "packed", "shipped", "out_for_delivery"].includes(
@@ -732,7 +996,16 @@ async function getAdminOrderWithinTransaction(
       createdAt: note.createdAt,
     })),
     shipments: order.shipments,
-    metadata: order.metadata,
+    confirmations: (order.confirmations || []).map((row: RuntimeValue) => ({
+      id: row.id,
+      method: row.method,
+      outcome: row.outcome,
+      note: row.note,
+      callbackAt: row.callbackAt,
+      actor: row.actor,
+      createdAt: row.createdAt,
+    })),
+    metadata: adminMetadata(order.metadata),
   };
 }
 
@@ -748,82 +1021,106 @@ export async function cancelAdminOrder(
       lock: transaction.LOCK.UPDATE,
     });
     if (!order) throw AppError.notFound("Order not found.");
-    if (
-      ["completed", "cancelled"].includes(order.orderStatus) ||
-      ["delivered", "returned"].includes(order.fulfillmentStatus)
-    )
-      throw AppError.conflict(
-        "INVALID_ORDER_TRANSITION",
-        "This order cannot be cancelled.",
-      );
-    if (["paid", "partially_refunded"].includes(order.paymentStatus))
-      throw AppError.conflict(
-        "REFUND_REQUIRED",
-        "Create the required refund before cancelling this paid order.",
-      );
-    const before: RuntimeValue = {
-      orderStatus: order.orderStatus,
-      paymentStatus: order.paymentStatus,
-    };
-    await releaseOrderReservations(
-      order.id,
-      "admin_order_cancelled",
-      transaction,
-      actorId,
-      ["active", "converted"],
-    );
-    await CouponUsage.update(
-      { status: "reversed" },
-      {
-        where: {
-          orderId: order.id,
-          status: { [Op.in]: ["reserved", "consumed"] },
-        },
-        transaction,
-      },
-    );
-    order.orderStatus = "cancelled";
-    order.paymentStatus = "cancelled";
-    order.cancellationReason = reason;
-    order.cancelledAt = new Date();
-    order.version += 1;
-    await order.save({ transaction });
-    await Payment.update(
-      { status: "cancelled", cancelledAt: new Date() },
-      {
-        where: {
-          orderId: order.id,
-          status: { [Op.in]: ["unpaid", "pending"] },
-        },
-        transaction,
-      },
-    );
-    await OrderEvent.create(
-      {
-        id: newId(),
-        orderId: order.id,
-        actorId,
-        type: "order_cancelled",
-        fromStatus: before.orderStatus,
-        toStatus: "cancelled",
-        message: "Order cancelled by staff.",
-        public: true,
-        metadata: { reason },
-      },
-      { transaction },
-    );
-    await recordAudit({
-      actorId,
-      action: "order.admin_cancel",
-      resourceType: "order",
-      resourceId: order.id,
-      before,
-      after: { orderStatus: "cancelled", paymentStatus: "cancelled" },
-      metadata: { reason },
-      request,
-      transaction,
-    });
+    await cancelLockedOrder(order, reason, actorId, request, transaction);
     return getAdminOrderWithinTransaction(order.id, transaction);
+  });
+}
+
+/**
+ * Cancels an order row already locked by the caller's transaction: releases
+ * stock and coupon usage exactly once and records the event and audit.
+ */
+export async function cancelLockedOrder(
+  order: RuntimeValue,
+  reason: RuntimeValue,
+  actorId: RuntimeValue,
+  request: RuntimeValue,
+  transaction: RuntimeValue,
+  message: string = "Order cancelled by staff.",
+) {
+  if (
+    ["completed", "cancelled"].includes(order.orderStatus) ||
+    ["delivered", "returned"].includes(order.fulfillmentStatus)
+  )
+    throw AppError.conflict(
+      "INVALID_ORDER_TRANSITION",
+      "This order cannot be cancelled.",
+    );
+  if (["paid", "partially_refunded"].includes(order.paymentStatus))
+    throw AppError.conflict(
+      "REFUND_REQUIRED",
+      "Create the required refund before cancelling this paid order.",
+    );
+  const before: RuntimeValue = {
+    orderStatus: order.orderStatus,
+    paymentStatus: order.paymentStatus,
+  };
+  await releaseOrderReservations(
+    order.id,
+    "admin_order_cancelled",
+    transaction,
+    actorId,
+    ["active", "converted"],
+  );
+  await CouponUsage.update(
+    { status: "reversed" },
+    {
+      where: {
+        orderId: order.id,
+        status: { [Op.in]: ["reserved", "consumed"] },
+      },
+      transaction,
+    },
+  );
+  order.orderStatus = "cancelled";
+  // Keep a completed refund visible; only open payments become cancelled.
+  if (["unpaid", "pending"].includes(order.paymentStatus))
+    order.paymentStatus = "cancelled";
+  order.cancellationReason = reason;
+  order.cancelledAt = new Date();
+  order.version += 1;
+  await order.save({ transaction });
+  await Payment.update(
+    { status: "cancelled", cancelledAt: new Date() },
+    {
+      where: {
+        orderId: order.id,
+        status: { [Op.in]: ["unpaid", "pending"] },
+      },
+      transaction,
+    },
+  );
+  await OrderEvent.create(
+    {
+      id: newId(),
+      orderId: order.id,
+      actorId,
+      type: "order_cancelled",
+      fromStatus: before.orderStatus,
+      toStatus: "cancelled",
+      message,
+      public: true,
+      metadata: { reason },
+    },
+    { transaction },
+  );
+  await addDomainEvent({
+    topic: "order.cancelled",
+    aggregateType: "order",
+    aggregateId: order.id,
+    payload: { orderId: order.id, reference: order.reference, reason },
+    transaction,
+  });
+  await recordAudit({
+    actorId,
+    action: "order.admin_cancel",
+    resourceType: "order",
+    resourceId: order.id,
+    before,
+    after: { orderStatus: "cancelled", paymentStatus: order.paymentStatus },
+    metadata: { reason },
+    request,
+    transaction,
   });
 }
 
@@ -853,7 +1150,8 @@ export async function addOrderNote(
           orderId: id,
           actorId,
           type: "customer_note",
-          message: payload.message,
+          // order_events.message is VARCHAR(255); the full text is in the note.
+          message: payload.message.slice(0, 255),
           public: true,
         },
         { transaction },
@@ -893,12 +1191,12 @@ export async function listPayments(query: RuntimeValue) {
               [Op.or]: [
                 {
                   reference: {
-                    [Op.like]: `%${String(query.search).slice(0, 80)}%`,
+                    [Op.like]: likeContains(query.search, 80),
                   },
                 },
                 {
                   customerPhone: {
-                    [Op.like]: `%${String(query.search).slice(0, 30)}%`,
+                    [Op.like]: likeContains(query.search, 30),
                   },
                 },
               ],
@@ -1045,4 +1343,61 @@ export async function collectCod(
     });
     return paymentDto(payment);
   });
+}
+
+export async function updateOrderTags(
+  id: string,
+  payload: RuntimeValue,
+  actorId: string,
+  request: RuntimeValue,
+) {
+  const tags = [
+    ...new Set<string>(
+      (payload.tags || []).map((tag: string) => tag.trim().toLowerCase()),
+    ),
+  ].slice(0, 12);
+  return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const order: RuntimeValue = await Order.findByPk(id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!order) throw AppError.notFound("Order not found.");
+    const before = order.tags || [];
+    order.tags = tags.length ? tags : null;
+    await order.save({ transaction });
+    await recordAudit({
+      actorId,
+      action: "order.tags_update",
+      resourceType: "order",
+      resourceId: order.id,
+      before: { tags: before },
+      after: { tags },
+      request,
+      transaction,
+    });
+    return { id: order.id, tags };
+  });
+}
+
+/** Full order details for packing slips, pick lists and invoices. */
+export async function getOrderDocuments(ids: string[]) {
+  const orders: RuntimeValue = await Order.findAll({
+    where: { id: { [Op.in]: ids } },
+    include: [
+      { model: OrderItem, as: "items" },
+      { model: OrderAddress, as: "addresses" },
+      { model: Payment, as: "payments" },
+      { model: Shipment, as: "shipments" },
+    ],
+    order: [["createdAt", "ASC"]],
+  });
+  return orders.map((order: RuntimeValue) => ({
+    ...orderDto(order, true),
+    shipments: (order.shipments || []).map((shipment: RuntimeValue) => ({
+      courier: shipment.courierName,
+      consignmentId: shipment.consignmentId,
+      trackingUrl: shipment.trackingUrl,
+      status: shipment.status,
+    })),
+  }));
 }

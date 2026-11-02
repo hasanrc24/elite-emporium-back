@@ -17,11 +17,19 @@ import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent } from "../events/outbox.service.js";
 import { mediaPublicUrl } from "../media/media.storage.js";
 
-function cleanText(value: RuntimeValue, maximum: RuntimeValue) {
+/**
+ * Strips all markup. sanitize-html entity-encodes what remains (`&` becomes
+ * `&amp;`); clients render text, so only the safe quote/ampersand entities
+ * are decoded back. `<` and `>` stay encoded.
+ */
+export function cleanText(value: RuntimeValue, maximum: RuntimeValue) {
   return sanitizeHtml(String(value || ""), {
     allowedTags: [],
     allowedAttributes: {},
   })
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
     .trim()
     .slice(0, maximum);
 }
@@ -42,6 +50,7 @@ function reviewDto(review: RuntimeValue, admin: RuntimeValue = false) {
     productId: review.productId,
     orderItemId: admin ? review.orderItemId : undefined,
     rating: review.rating,
+    fit: review.fit || null,
     title: review.title,
     body: review.body,
     verifiedPurchase: review.verifiedPurchase,
@@ -91,24 +100,63 @@ async function recalculateProductReviews(
   );
 }
 
+const reviewSorts: Record<string, RuntimeValue> = {
+  newest: [["createdAt", "DESC"]],
+  highest: [
+    ["rating", "DESC"],
+    ["createdAt", "DESC"],
+  ],
+  lowest: [
+    ["rating", "ASC"],
+    ["createdAt", "DESC"],
+  ],
+};
+
+/** `idOrSlug` is a product id (ULID) or slug; only published products list reviews. */
 export async function listPublicReviews(
-  productId: RuntimeValue,
+  idOrSlug: RuntimeValue,
   query: RuntimeValue,
 ) {
   const product: RuntimeValue = await Product.findOne({
-    where: { id: productId, status: "published" },
+    where: {
+      [Op.or]: [{ id: String(idOrSlug) }, { slug: String(idOrSlug) }],
+      status: "published",
+      visibility: { [Op.ne]: "hidden" },
+    },
     attributes: ["id", "reviewAverage", "reviewCount"],
   });
   if (!product) throw AppError.notFound("Product not found.");
+  const productId = product.id;
   const { page, pageSize, limit, offset }: RuntimeValue = pagination(query);
-  const result: RuntimeValue = await Review.findAndCountAll({
-    where: { productId, status: "approved" },
-    include: reviewInclude,
-    distinct: true,
-    limit,
-    offset,
-    order: [["createdAt", "DESC"]],
-  });
+  const where: RuntimeValue = { productId, status: "approved" };
+  const rating = Number(query.rating);
+  if (Number.isInteger(rating) && rating >= 1 && rating <= 5)
+    where.rating = rating;
+  const include: RuntimeValue =
+    query.withPhotos === "true"
+      ? reviewInclude.map((item: RuntimeValue) =>
+          item.as === "media" ? { ...item, required: true } : item,
+        )
+      : reviewInclude;
+  const [result, distribution]: RuntimeValue = await Promise.all([
+    Review.findAndCountAll({
+      where,
+      include,
+      distinct: true,
+      limit,
+      offset,
+      order: [
+        ...(reviewSorts[String(query.sort)] || reviewSorts.newest),
+        ["id", "ASC"],
+      ],
+    }),
+    Review.findAll({
+      attributes: ["rating", [fn("COUNT", col("id")), "count"]],
+      where: { productId, status: "approved" },
+      group: ["rating"],
+      raw: true,
+    }),
+  ]);
   return {
     data: result.rows.map((review: RuntimeValue) => reviewDto(review)),
     meta: {
@@ -116,6 +164,16 @@ export async function listPublicReviews(
       aggregate: {
         average: Number(product.reviewAverage),
         count: Number(product.reviewCount),
+        distribution: Object.fromEntries(
+          [5, 4, 3, 2, 1].map((stars) => [
+            stars,
+            Number(
+              distribution.find(
+                (row: RuntimeValue) => Number(row.rating) === stars,
+              )?.count || 0,
+            ),
+          ]),
+        ),
       },
     },
   };
@@ -128,7 +186,6 @@ export async function listOwnReviews(
   const { page, pageSize, limit, offset }: RuntimeValue = pagination(query);
   const result: RuntimeValue = await Review.findAndCountAll({
     where: { userId },
-    paranoid: false,
     include: [
       ...reviewInclude,
       { model: Product, as: "product", attributes: ["id", "slug"] },
@@ -242,6 +299,7 @@ export async function createReview(
         userId,
         orderItemId: orderItem.id,
         rating: payload.rating,
+        fit: payload.fit || null,
         title: title || null,
         body,
         status: "pending",
@@ -295,10 +353,17 @@ export async function updateReview(
       userId,
       transaction,
     );
+    const body: RuntimeValue = cleanText(payload.body, 5000);
+    if (!body)
+      throw AppError.unprocessable(
+        "REVIEW_BODY_REQUIRED",
+        "Write a review before submitting.",
+      );
     const before: RuntimeValue = review.toJSON();
     review.rating = payload.rating;
+    if (payload.fit !== undefined) review.fit = payload.fit || null;
     review.title = cleanText(payload.title, 180) || null;
-    review.body = cleanText(payload.body, 5000);
+    review.body = body;
     review.status = "pending";
     review.moderationReason = null;
     review.version += 1;

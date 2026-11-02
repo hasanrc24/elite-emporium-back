@@ -87,11 +87,13 @@ export async function resolveCart(
   let cart: RuntimeValue = where ? await Cart.findOne({ where }) : null;
   let issuedToken = null;
   if (!cart && create) {
-    if (!userId) issuedToken = token || randomToken();
+    // Always issue a fresh token: the cookie's token may still belong to a
+    // converted/merged row, and reusing it violates the unique tokenHash.
+    if (!userId) issuedToken = randomToken();
     cart = await Cart.create({
       id: newId(),
       userId: userId || null,
-      tokenHash: userId ? null : sha256(issuedToken),
+      tokenHash: userId ? null : sha256(issuedToken!),
       status: "active",
       expiresAt: userId ? null : new Date(Date.now() + 30 * 86400000),
       version: 1,

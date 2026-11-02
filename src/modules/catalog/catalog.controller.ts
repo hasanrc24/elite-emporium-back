@@ -1,21 +1,7 @@
-import {
-  Controller,
-  Get,
-  Inject,
-  Post,
-  Req,
-  Res,
-  UseGuards,
-} from "@nestjs/common";
+import { Controller, Get, Inject, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { ApplicationServices } from "../../app/application-services.js";
-import {
-  AccessTokenGuard,
-  PermissionGuard,
-  Permissions,
-  ValidateRequest,
-} from "../../app/request-security.js";
-import { createProductSchema } from "./product.schemas.js";
+import {} from "../../app/request-security.js";
 
 const locale = (req: Request): "en" | "bn" =>
   req.query.locale === "bn" ? "bn" : "en";
@@ -135,34 +121,6 @@ export class CatalogController {
         data: await this.services.catalog.searchSuggestions(
           req.query.q,
           locale(req),
-        ),
-        meta: null,
-        requestId: req.id,
-      }))(request, response);
-  }
-}
-
-@Controller("admin")
-export class AdminCatalogController {
-  constructor(
-    @Inject(ApplicationServices) private readonly services: ApplicationServices,
-  ) {}
-
-  @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("catalog.manage")
-  @ValidateRequest(createProductSchema)
-  @Post("/products")
-  route0(@Req() request: Request, @Res() response: Response): Promise<unknown> {
-    return (async (req, res) =>
-      res.status(201).json({
-        data: this.services.catalog.publicProduct(
-          await this.services.catalog.createProduct(
-            req.body,
-            req.auth.user.id,
-            req,
-          ),
-          "en",
-          true,
         ),
         meta: null,
         requestId: req.id,

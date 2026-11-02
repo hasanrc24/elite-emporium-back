@@ -24,6 +24,7 @@ import { sequelize } from "../../db/sequelize.js";
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
 import { recordAudit } from "../audits/audit.service.js";
@@ -207,9 +208,9 @@ export async function listAdminPrivacyRequests(query: RuntimeValue) {
   const customerWhere = query.search
     ? {
         [Op.or]: [
-          { name: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } },
-          { phone: { [Op.like]: `%${String(query.search).slice(0, 30)}%` } },
-          { email: { [Op.like]: `%${String(query.search).slice(0, 100)}%` } },
+          { name: { [Op.like]: likeContains(query.search, 100) } },
+          { phone: { [Op.like]: likeContains(query.search, 30) } },
+          { email: { [Op.like]: likeContains(query.search, 100) } },
         ],
       }
     : undefined;
@@ -284,6 +285,12 @@ async function anonymizeCustomer(
   transaction: RuntimeValue,
 ) {
   await ensureDeletionCanComplete(user.id, transaction);
+  const roles: RuntimeValue = await user.getRoles({ transaction });
+  if (roles.some((role: RuntimeValue) => role.key !== "customer"))
+    throw AppError.conflict(
+      "STAFF_ACCOUNT_DELETION_BLOCKED",
+      "Remove staff access through staff management before anonymizing this account.",
+    );
   const methods: RuntimeValue = await MfaMethod.findAll({
     where: { userId: user.id },
     attributes: ["id"],
@@ -454,7 +461,9 @@ export async function transitionPrivacyRequest(
         "CUSTOMER_RECORD_MISSING",
         "The customer record required by this request is unavailable.",
       );
+    // Captured before anonymization clears the contact fields.
     const recipient = user.email || user.phone;
+    const channel = user.email ? "email" : "sms";
     if (payload.status === "completed" && row.type === "deletion")
       await anonymizeCustomer(user, actorId, transaction);
     row.status = payload.status;
@@ -478,7 +487,7 @@ export async function transitionPrivacyRequest(
     )
       await queueNotification({
         event: `privacy.${row.type}.${payload.status}`,
-        channel: user.email ? "email" : "sms",
+        channel,
         locale: user.locale,
         recipient,
         payload: {

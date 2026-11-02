@@ -221,7 +221,11 @@ function allocateProportionally(
       index === lines.length - 1
         ? left
         : money(intended.times(available).dividedBy(total)).toDecimalPlaces(2);
-    const applied = allocation.lessThan(available) ? allocation : available;
+    // Never allocate more than is still available on the line or left of the
+    // coupon amount: rounding earlier shares up could otherwise leave `left`
+    // negative and give the last line a negative discount.
+    const capped = allocation.lessThan(left) ? allocation : left;
+    const applied = capped.lessThan(available) ? capped : available;
     discounts.set(line.id, discounts.get(line.id).plus(applied));
     remaining.set(line.id, available.minus(applied));
     left = left.minus(applied);
@@ -322,7 +326,9 @@ export async function calculatePromotions({
       amount = stillAvailable;
       deliveryDiscount = deliveryDiscount.plus(stillAvailable);
     }
-    if (amount.isZero())
+    // The cart has no delivery choice yet (deliveryTotal 0), so a free-delivery
+    // coupon can only be valued at checkout; do not reject it in the cart.
+    if (amount.isZero() && (strictContext || coupon.type !== "free_delivery"))
       couponError(
         "COUPON_NO_DISCOUNT",
         "This coupon does not apply a discount to the current cart.",

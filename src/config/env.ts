@@ -194,7 +194,10 @@ const schema = z
         path: ["ENCRYPTION_MASTER_KEY"],
         message: "must be replaced in production",
       });
-    if (value.MEDIA_SIGNING_SECRET === "development-only-media-signing-secret")
+    if (
+      value.MEDIA_SIGNING_SECRET === "development-only-media-signing-secret" ||
+      value.MEDIA_SIGNING_SECRET.includes("replace-with")
+    )
       context.addIssue({
         code: "custom",
         path: ["MEDIA_SIGNING_SECRET"],

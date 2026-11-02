@@ -7,10 +7,27 @@ interface PriceVariant {
   saleEndsAt?: string | Date | null;
 }
 
+function instant(value: string | Date): number {
+  return new Date(value).getTime();
+}
+
+/**
+ * A sale applies from `saleStartsAt` (inclusive) until `saleEndsAt`
+ * (exclusive), both UTC instants, and only while it is below the regular
+ * price. An unparseable schedule bound disables the sale instead of
+ * silently discounting forever.
+ */
 export function isSaleActive(variant: PriceVariant, at = new Date()): boolean {
-  if (variant.salePrice == null) return false;
-  if (variant.saleStartsAt && new Date(variant.saleStartsAt) > at) return false;
-  if (variant.saleEndsAt && new Date(variant.saleEndsAt) <= at) return false;
+  if (variant.salePrice == null || variant.salePrice === "") return false;
+  const now = at.getTime();
+  if (variant.saleStartsAt) {
+    const starts = instant(variant.saleStartsAt);
+    if (Number.isNaN(starts) || starts > now) return false;
+  }
+  if (variant.saleEndsAt) {
+    const ends = instant(variant.saleEndsAt);
+    if (Number.isNaN(ends) || ends <= now) return false;
+  }
   return money(variant.salePrice).lessThan(money(variant.regularPrice));
 }
 

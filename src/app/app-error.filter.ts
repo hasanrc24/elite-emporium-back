@@ -31,6 +31,16 @@ export class AppErrorFilter implements ExceptionFilter {
       appError = AppError.notFound(
         `No route matches ${request.method} ${request.originalUrl}.`,
       );
+    else if (error instanceof HttpException && error.getStatus() < 500)
+      // Framework errors such as multer's 413 keep their client status.
+      appError = new AppError(
+        error.getStatus(),
+        error.constructor.name
+          .replace(/Exception$/, "")
+          .replace(/([a-z])([A-Z])/g, "$1_$2")
+          .toUpperCase() || "REQUEST_ERROR",
+        error.message,
+      );
     else {
       logger.error(
         { err: error, requestId: request.id },

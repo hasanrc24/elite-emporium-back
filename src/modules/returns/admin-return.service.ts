@@ -1,6 +1,7 @@
 import { Op } from "sequelize";
 import {
   InventoryLevel,
+  InventoryReservation,
   InventoryMovement,
   MediaAsset,
   Order,
@@ -20,12 +21,20 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId, orderReference } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { money, moneyString } from "../../lib/money.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { effectivePrice, isSaleActive } from "../catalog/pricing.js";
 import { addDomainEvent, queueNotification } from "../events/outbox.service.js";
+import { settingValue } from "../settings/settings.service.js";
+import { holdTrigger } from "./exchange-hold.js";
+import {
+  convertExchangeHolds,
+  holdExchangeStock,
+  releaseExchangeHolds,
+} from "./exchange-hold.service.js";
 import { refundableLineAmount } from "./return-policy.service.js";
 import {
   loadReturnDetail,
@@ -129,12 +138,12 @@ export async function listAdminReturns(query: RuntimeValue) {
   if (query.resolution) where.resolution = query.resolution;
   Object.assign(where, dateRangeWhere(query));
   if (query.search) {
-    const search: RuntimeValue = String(query.search).slice(0, 100);
+    const search: RuntimeValue = likeContains(query.search, 100);
     where[Op.or] = [
-      { reference: { [Op.like]: `%${search}%` } },
-      { "$order.reference$": { [Op.like]: `%${search}%` } },
-      { "$order.customerName$": { [Op.like]: `%${search}%` } },
-      { "$order.customerPhone$": { [Op.like]: `%${search}%` } },
+      { reference: { [Op.like]: search } },
+      { "$order.reference$": { [Op.like]: search } },
+      { "$order.customerName$": { [Op.like]: search } },
+      { "$order.customerPhone$": { [Op.like]: search } },
     ];
   }
   const result: RuntimeValue = await ReturnRequest.findAndCountAll({
@@ -332,6 +341,19 @@ export async function approveReturn(
           "Use the exchange price-difference workflow after receiving the item.",
         );
       row.refundAmount = null;
+      const holdSettings: RuntimeValue = await settingValue(
+        "returns",
+        transaction,
+      );
+      if (holdTrigger(holdSettings) === "approval")
+        await holdExchangeStock(
+          await ReturnItem.findAll({
+            where: { returnId: row.id },
+            transaction,
+          }),
+          new Map(),
+          transaction,
+        );
     }
     row.status = "approved";
     row.approvedAt = new Date();
@@ -384,6 +406,16 @@ export async function rejectReturn(
     row.rejectedAt = new Date();
     row.version += 1;
     await row.save({ transaction });
+    await releaseExchangeHolds(
+      (
+        await ReturnItem.findAll({
+          where: { returnId: row.id },
+          attributes: ["id"],
+          transaction,
+        })
+      ).map((item: RuntimeValue) => item.id),
+      transaction,
+    );
     await recordReturnTransition({
       row,
       actorId,
@@ -762,11 +794,28 @@ export async function createExchangeDraft(
     const byId = new Map(
       variants.map((variant: RuntimeValue) => [variant.id, variant]),
     );
+    // Stock held for this exchange is already counted as reserved.
+    const heldByVariant = new Map<string, number>();
+    for (const hold of await InventoryReservation.findAll({
+      where: {
+        returnItemId: {
+          [Op.in]: row.items.map((item: RuntimeValue) => item.id),
+        },
+        status: "active",
+      },
+      transaction,
+    }))
+      heldByVariant.set(
+        hold.variantId,
+        (heldByVariant.get(hold.variantId) || 0) + Number(hold.quantity),
+      );
     const lines: RuntimeValue = payload.items.map((item: RuntimeValue) => {
       const variant: RuntimeValue = byId.get(item.variantId);
       if (
         variant.stockPolicy === "deny" &&
-        item.quantity > availableVariantQuantity(variant)
+        item.quantity >
+          availableVariantQuantity(variant) +
+            (heldByVariant.get(variant.id) || 0)
       )
         throw AppError.unprocessable(
           "INSUFFICIENT_REPLACEMENT_STOCK",
@@ -904,6 +953,17 @@ export async function createExchangeDraft(
       },
       { transaction },
     );
+    const heldLines = await convertExchangeHolds(
+      row.items.map((item: RuntimeValue) => item.id),
+      replacement.id,
+      payload.items,
+      transaction,
+    );
+    if (heldLines)
+      await replacement.update(
+        { metadata: { ...replacement.metadata, inventoryReserved: true } },
+        { transaction },
+      );
     row.replacementOrderId = replacement.id;
     row.version += 1;
     await row.save({ transaction });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { money } from "../../lib/money.js";
 
 export const productSlugSchema = z
   .string()
@@ -41,7 +42,9 @@ const variantFields = {
   costPrice: productMoneySchema.nullable().optional(),
   saleStartsAt: dateTime,
   saleEndsAt: dateTime,
-  stockPolicy: z.enum(["deny", "allow_backorder", "preorder", "available"]).default("deny"),
+  stockPolicy: z
+    .enum(["deny", "allow_backorder", "preorder", "available"])
+    .default("deny"),
   preorderAvailableAt: dateTime,
   preorderMessage: z.string().trim().max(255).nullable().optional(),
   weightGrams: z.number().int().min(0).max(10_000_000).nullable().optional(),
@@ -52,6 +55,8 @@ const variantFields = {
 
 interface VariantValue {
   sku: string;
+  barcode?: string | null;
+  attributes?: Record<string, string>;
   regularPrice: string;
   salePrice?: string | null;
   saleStartsAt?: string | null;
@@ -65,7 +70,7 @@ interface VariantValue {
 function validateVariant(value: VariantValue, context: z.RefinementCtx) {
   if (
     value.salePrice != null &&
-    Number(value.salePrice) >= Number(value.regularPrice)
+    money(value.salePrice).greaterThanOrEqualTo(money(value.regularPrice))
   )
     context.addIssue({
       code: "custom",
@@ -75,7 +80,7 @@ function validateVariant(value: VariantValue, context: z.RefinementCtx) {
   if (
     value.saleStartsAt &&
     value.saleEndsAt &&
-    value.saleStartsAt >= value.saleEndsAt
+    Date.parse(value.saleStartsAt) >= Date.parse(value.saleEndsAt)
   )
     context.addIssue({
       code: "custom",
@@ -93,8 +98,15 @@ function validateVariant(value: VariantValue, context: z.RefinementCtx) {
 const createVariantSchema = z
   .object({
     ...variantFields,
-    stock: z.number().int().min(0),
-    lowStockThreshold: z.number().int().min(0).default(3),
+    stock: z.number().int().min(0).max(1_000_000),
+    // Omitted or null inherits the product, then the global, threshold.
+    lowStockThreshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(1_000_000)
+      .nullable()
+      .optional(),
   })
   .superRefine(validateVariant);
 
@@ -104,8 +116,16 @@ const updateVariantSchema = z
     id: id.optional(),
     clientKey: z.string().trim().min(1).max(100).optional(),
     version: z.number().int().positive().optional(),
-    initialStock: z.number().int().min(0).default(0),
-    lowStockThreshold: z.number().int().min(0).default(3),
+    // Optional: omitting it must leave existing on-hand stock untouched.
+    initialStock: z.number().int().min(0).max(1_000_000).optional(),
+    // null inherits the product, then the global, low-stock threshold.
+    lowStockThreshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(1_000_000)
+      .nullable()
+      .optional(),
   })
   .superRefine((value, context) => {
     validateVariant(value, context);
@@ -156,11 +176,48 @@ const shippingProfileSchema = z
   .nullable()
   .optional();
 
+const localizedShortText = z
+  .object({
+    en: z.string().trim().max(300).default(""),
+    bn: z.string().trim().max(300).default(""),
+  })
+  .optional();
+const fashionSchema = z
+  .object({
+    fitType: z
+      .enum(["regular", "slim", "loose", "oversized"])
+      .nullable()
+      .optional(),
+    fitNote: z
+      .enum(["runs_small", "true_to_size", "runs_large"])
+      .nullable()
+      .optional(),
+    stitched: z.boolean().nullable().optional(),
+    pieces: localizedShortText,
+    occasion: localizedShortText,
+    origin: localizedShortText,
+    modelHeightCm: z.number().int().min(100).max(220).nullable().optional(),
+    modelSize: z.string().trim().max(20).nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
 interface ProductValidationValue {
   variants: Array<VariantValue & { id?: string; clientKey?: string }>;
   media: Array<{ role: string }>;
   status: string;
   publishAt?: string | null;
+}
+
+/** Stable `key:value|key:value` identity of a variant's attribute choices. */
+export function combinationSignature(
+  attributes: Record<string, string> | null | undefined,
+): string {
+  return Object.entries(attributes || {})
+    .filter(([, value]) => String(value).trim() !== "")
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value}`)
+    .join("|");
 }
 
 function validateProduct(
@@ -173,6 +230,25 @@ function validateProduct(
       code: "custom",
       path: ["variants"],
       message: "Variant SKUs must be unique.",
+    });
+  const barcodes = value.variants
+    .map((item) => item.barcode?.trim().toLocaleLowerCase("en"))
+    .filter(Boolean);
+  if (new Set(barcodes).size !== barcodes.length)
+    context.addIssue({
+      code: "custom",
+      path: ["variants"],
+      message: "Variant barcodes must be unique.",
+    });
+  const signatures = value.variants
+    .filter((item) => item.status === "active")
+    .map((item) => combinationSignature(item.attributes))
+    .filter(Boolean);
+  if (new Set(signatures).size !== signatures.length)
+    context.addIssue({
+      code: "custom",
+      path: ["variants"],
+      message: "Variant attribute combinations must be unique.",
     });
   const defaults = value.variants.filter(
     (item) => item.isDefault && item.status === "active",
@@ -212,12 +288,21 @@ const productFields = {
     .default("catalog_search"),
   taxClass: z.string().trim().max(80).default("standard"),
   shippingProfile: shippingProfileSchema,
+  fashion: fashionSchema,
   translations,
 };
 
 export const createProductSchema = z
   .object({
     ...productFields,
+    lowStockThreshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(1_000_000)
+      .nullable()
+      .optional(),
+    sizeChartIds: z.array(id).max(10).optional(),
     attributes: z.array(attributeSchema).max(100).default([]),
     variants: z.array(createVariantSchema).min(1).max(250),
     media: z.array(createMediaSchema).max(100).default([]),
@@ -228,9 +313,26 @@ export const updateProductSchema = z
   .object({
     ...productFields,
     version: z.number().int().positive(),
+    // null inherits the global low-stock threshold.
+    lowStockThreshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(1_000_000)
+      .nullable()
+      .optional(),
+    // Reusable size charts; omitted keeps the current assignment.
+    sizeChartIds: z.array(id).max(10).optional(),
     attributes: z.array(attributeSchema).max(100).default([]),
     variants: z.array(updateVariantSchema).min(1).max(250),
     media: z.array(updateMediaSchema).max(100).default([]),
+    // Merchandising links (BR-CAT-001); omitted keeps the current links.
+    relations: z
+      .object({
+        related: z.array(id).max(12).default([]),
+        cross_sell: z.array(id).max(12).default([]),
+      })
+      .optional(),
   })
   .superRefine((value, context) => {
     validateProduct(value, context);

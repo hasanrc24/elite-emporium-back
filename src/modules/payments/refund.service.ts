@@ -14,6 +14,7 @@ import { canonicalJson } from "../../lib/canonical-json.js";
 import { sha256 } from "../../lib/crypto.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { money, moneyString } from "../../lib/money.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
@@ -132,11 +133,11 @@ export async function listRefunds(query: RuntimeValue) {
     ? {
         [Op.or]: [
           {
-            reference: { [Op.like]: `%${String(query.search).slice(0, 80)}%` },
+            reference: { [Op.like]: likeContains(query.search, 80) },
           },
           {
             customerPhone: {
-              [Op.like]: `%${String(query.search).slice(0, 30)}%`,
+              [Op.like]: likeContains(query.search, 30),
             },
           },
         ],
@@ -148,6 +149,10 @@ export async function listRefunds(query: RuntimeValue) {
       {
         model: Payment,
         as: "payment",
+        // The order filter only narrows refunds if the payment join is
+        // required too; otherwise it becomes a nested LEFT JOIN that keeps
+        // every refund and merely nulls the non-matching payment.
+        required: Boolean(orderWhere),
         include: [{ model: Order, as: "order", where: orderWhere }],
       },
       { model: ReturnRequest, as: "return", required: false },

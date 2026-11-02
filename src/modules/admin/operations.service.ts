@@ -25,14 +25,17 @@ import { sequelize } from "../../db/sequelize.js";
 import { encryptSecret } from "../../lib/encryption.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
-import { moneyString } from "../../lib/money.js";
+import { likeContains } from "../../lib/like.js";
+import { money, moneyString } from "../../lib/money.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
 import { pagination, pageEnvelope } from "../../lib/pagination.js";
+import { requireRequestPermission } from "../../app/middleware/authenticate.js";
 import { env } from "../../config/env.js";
 import { signPrivateMedia } from "../media/media.storage.js";
 import { renderTemplate, deliverWebhook } from "../../jobs/job-runner.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent } from "../events/outbox.service.js";
+import { outcomeRates } from "./report-math.js";
 
 function dateRange(
   query: RuntimeValue,
@@ -45,7 +48,7 @@ export async function listAudits(query: RuntimeValue) {
   const { page, pageSize, limit, offset }: RuntimeValue = pagination(query);
   const where: RuntimeValue = { ...dateRange(query) };
   if (query.action)
-    where.action = { [Op.like]: `%${String(query.action).slice(0, 120)}%` };
+    where.action = { [Op.like]: likeContains(query.action, 120) };
   if (query.resourceType)
     where.resourceType = String(query.resourceType).slice(0, 100);
   if (query.resourceId)
@@ -73,8 +76,7 @@ export async function listAudits(query: RuntimeValue) {
 export async function listNotificationTemplates(query: RuntimeValue) {
   const { page, pageSize, limit, offset }: RuntimeValue = pagination(query);
   const where: RuntimeValue = {};
-  if (query.event)
-    where.event = { [Op.like]: `%${String(query.event).slice(0, 100)}%` };
+  if (query.event) where.event = { [Op.like]: likeContains(query.event, 100) };
   if (query.channel) where.channel = query.channel;
   if (query.locale) where.locale = query.locale;
   const result: RuntimeValue = await NotificationTemplate.findAndCountAll({
@@ -128,7 +130,9 @@ export async function testNotificationTemplate(
     event: `template.test.${row.event}`,
     channel: row.channel,
     locale: row.locale,
-    recipient: payload.recipient,
+    // A dashboard test lands in the tester's own inbox, never other staff's.
+    recipient:
+      row.channel === "dashboard" ? `user:${actorId}` : payload.recipient,
     templateId: row.id,
     payload: payload.variables,
     renderedSubject: rendered.subject,
@@ -213,8 +217,7 @@ export async function listNotificationOutbox(query: RuntimeValue) {
   const where: RuntimeValue = { ...dateRange(query) };
   if (query.status) where.status = query.status;
   if (query.channel) where.channel = query.channel;
-  if (query.event)
-    where.event = { [Op.like]: `%${String(query.event).slice(0, 100)}%` };
+  if (query.event) where.event = { [Op.like]: likeContains(query.event, 100) };
   const result: RuntimeValue = await NotificationOutbox.findAndCountAll({
     where,
     attributes: { exclude: ["payload", "renderedBody"] },
@@ -230,6 +233,10 @@ export async function getNotificationDelivery(id: RuntimeValue) {
     attributes: { exclude: ["payload"] },
   });
   if (!row) throw AppError.notFound("Notification delivery not found.");
+  // Verification codes and reset links are credentials; never show them to
+  // staff (a notifications.manage holder could otherwise take over accounts).
+  if (["account.verify", "account.password_reset"].includes(row.event))
+    row.renderedBody = null;
   return row;
 }
 
@@ -305,7 +312,7 @@ export async function reportSummary(query: RuntimeValue) {
   const grossRevenue: RuntimeValue = moneyString(revenue?.total || 0);
   const refundAmount: RuntimeValue = moneyString(refunds?.total || 0);
   const averageOrderValue: RuntimeValue = orderCount
-    ? moneyString(Number(grossRevenue) / orderCount)
+    ? moneyString(money(grossRevenue).div(orderCount))
     : "0.00";
   return {
     range: {
@@ -376,6 +383,34 @@ export async function reportData(report: RuntimeValue, query: RuntimeValue) {
       order: [[fn("DATE", col("createdAt")), "ASC"]],
       raw: true,
     });
+  } else if (report === "order_outcomes") {
+    // Confirmation, cancellation and RTO rates by delivery zone or sales
+    // channel (BR-REP-001).
+    const groupColumn =
+      query.groupBy === "channel" ? "channel" : "deliveryCode";
+    const count = (condition: string) =>
+      literal(`SUM(CASE WHEN ${condition} THEN 1 ELSE 0 END)`);
+    const grouped: RuntimeValue = await Order.findAll({
+      attributes: [
+        [col(groupColumn), "group"],
+        [fn("MAX", col("deliveryLabel")), "label"],
+        [fn("COUNT", col("id")), "orders"],
+        [count("confirmationStatus <> 'not_required'"), "needsConfirmation"],
+        [count("confirmationStatus = 'confirmed'"), "confirmed"],
+        [count("orderStatus = 'cancelled'"), "cancelled"],
+        [count("fulfillmentStatus = 'delivered'"), "delivered"],
+        [count("fulfillmentStatus = 'returned_to_origin'"), "rto"],
+      ],
+      where: { ...range, orderStatus: { [Op.notIn]: ["draft", "failed"] } },
+      group: [col(groupColumn)],
+      order: [[fn("COUNT", col("id")), "DESC"]],
+      raw: true,
+    });
+    rows = grouped.map((row: RuntimeValue) => ({
+      group: row.group,
+      label: groupColumn === "channel" ? row.group : row.label,
+      ...outcomeRates(row),
+    }));
   } else if (report === "payments" || report === "payment_method")
     rows = await Payment.findAll({
       attributes: [
@@ -500,11 +535,22 @@ export async function listExports(
   return pageEnvelope(result, page, pageSize);
 }
 
+// Exports containing PII/audit data need the domain export permission in
+// addition to the generic reports permission guarding the route.
+const exportPermissions: Record<string, string> = {
+  orders: "orders.export",
+  customers: "customers.export",
+  audits: "audits.export",
+  customer_privacy_export: "customers.export",
+};
+
 export async function createExport(
   payload: RuntimeValue,
   actorId: RuntimeValue,
   request: RuntimeValue,
 ) {
+  if (exportPermissions[payload.report])
+    requireRequestPermission(request, exportPermissions[payload.report]);
   const row: RuntimeValue = await ExportJob.create({
     id: newId(),
     report: payload.report,
@@ -531,7 +577,7 @@ export async function createExport(
   return row;
 }
 
-export async function getExport(id: RuntimeValue) {
+export async function getExport(id: RuntimeValue, request: RuntimeValue) {
   const row: RuntimeValue = await ExportJob.findByPk(id, {
     include: [
       { model: User, as: "requester", attributes: ["id", "name"] },
@@ -539,6 +585,8 @@ export async function getExport(id: RuntimeValue) {
     ],
   });
   if (!row) throw AppError.notFound("Export job not found.");
+  if (exportPermissions[row.report])
+    requireRequestPermission(request, exportPermissions[row.report]);
   const value: RuntimeValue = row.toJSON();
   delete value.file;
   if (row.status === "ready" && row.file) {

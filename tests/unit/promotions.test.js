@@ -72,4 +72,52 @@ describe("promotion allocation", () => {
       }),
     ).rejects.toMatchObject({ code: "COUPON_CUSTOMER_RESTRICTED" });
   });
+
+  it("never gives a line a negative share when rounded shares exceed the coupon", async () => {
+    const lines = ["a", "b", "c", "d"].map((id) => ({
+      id,
+      productId: `p-${id}`,
+      categoryId: "c1",
+      quantity: 1,
+      total: money("10.00"),
+      onSale: false,
+    }));
+    const result = await calculatePromotions({
+      coupons: [coupon({ amount: "0.02" })],
+      lines,
+      subtotal: money("40.00"),
+      deliveryTotal: money(0),
+    });
+    for (const value of Object.values(result.lineDiscounts))
+      expect(money(value).isNegative()).toBe(false);
+    expect(result.discountTotal).toBe("0.02");
+  });
+
+  it("lets a free-delivery coupon sit in the cart before delivery is chosen", async () => {
+    const line = {
+      id: "a",
+      productId: "p1",
+      categoryId: "c1",
+      quantity: 1,
+      total: money("100.00"),
+      onSale: false,
+    };
+    const freeDelivery = coupon({ type: "free_delivery", amount: "0.00" });
+    const cart = await calculatePromotions({
+      coupons: [freeDelivery],
+      lines: [line],
+      subtotal: money("100.00"),
+      deliveryTotal: money(0),
+    });
+    expect(cart.deliveryDiscount).toBe("0.00");
+    const checkout = await calculatePromotions({
+      coupons: [freeDelivery],
+      lines: [line],
+      subtotal: money("100.00"),
+      deliveryTotal: money("80.00"),
+      strictContext: true,
+      transaction: null,
+    });
+    expect(checkout.deliveryDiscount).toBe("80.00");
+  });
 });

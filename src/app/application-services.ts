@@ -7,14 +7,20 @@ import * as auth from "../modules/auth/auth.service.js";
 import * as carts from "../modules/cart/cart.service.js";
 import * as adminProducts from "../modules/catalog/admin-product.service.js";
 import * as catalog from "../modules/catalog/catalog.service.js";
+import * as productCsv from "../modules/catalog/product-csv.service.js";
 import * as taxonomies from "../modules/catalog/taxonomy.service.js";
+import * as search from "../modules/catalog/search.service.js";
 import * as variantMatrix from "../modules/catalog/variant-matrix.service.js";
 import * as content from "../modules/content/content.service.js";
 import * as integrations from "../modules/integrations/integration.service.js";
 import * as inventory from "../modules/inventory/inventory.service.js";
 import * as media from "../modules/media/media.service.js";
+import * as staffNotifications from "../modules/notifications/staff-notification.service.js";
 import * as adminOrders from "../modules/orders/admin-order.service.js";
+import * as confirmations from "../modules/orders/confirmation.service.js";
+import * as risk from "../modules/orders/risk.service.js";
 import * as orders from "../modules/orders/order.service.js";
+import * as manualPayments from "../modules/payments/manual-payment.service.js";
 import * as payments from "../modules/payments/payment.service.js";
 import * as refunds from "../modules/payments/refund.service.js";
 import * as coupons from "../modules/promotions/admin-coupon.service.js";
@@ -22,18 +28,41 @@ import * as adminReturns from "../modules/returns/admin-return.service.js";
 import * as returns from "../modules/returns/return.service.js";
 import * as reviews from "../modules/reviews/review.service.js";
 import * as shipping from "../modules/shipping/admin-shipping.service.js";
+import * as locations from "../modules/shipping/location.service.js";
 import * as privacy from "../modules/users/privacy.service.js";
 import * as users from "../modules/users/user.service.js";
 import * as wishlists from "../modules/wishlist/wishlist.service.js";
 
 @Injectable()
 export class ApplicationServices {
+  readonly confirmations = {
+    bulkConfirm: confirmations.bulkConfirm,
+    confirmByToken: confirmations.confirmByToken,
+    listConfirmationQueue: confirmations.listConfirmationQueue,
+    lookupConfirmation: confirmations.lookupConfirmation,
+    recordConfirmation: confirmations.recordConfirmation,
+  };
+  readonly risk = {
+    listBlocklist: risk.listBlocklist,
+    saveBlocklistEntry: risk.saveBlocklistEntry,
+  };
+  readonly locations = {
+    listLocations: locations.listLocations,
+  };
+  readonly search = {
+    deleteSynonym: search.deleteSynonym,
+    listSearchMisses: search.listSearchMisses,
+    listSynonyms: search.listSynonyms,
+    saveSynonym: search.saveSynonym,
+  };
   readonly adminOrders = {
     addOrderNote: adminOrders.addOrderNote,
     cancelAdminOrder: adminOrders.cancelAdminOrder,
     collectCod: adminOrders.collectCod,
     createManualOrder: adminOrders.createManualOrder,
     getAdminOrder: adminOrders.getAdminOrder,
+    getOrderDocuments: adminOrders.getOrderDocuments,
+    updateOrderTags: adminOrders.updateOrderTags,
     getPayment: adminOrders.getPayment,
     listAdminOrders: adminOrders.listAdminOrders,
     listPayments: adminOrders.listPayments,
@@ -43,6 +72,7 @@ export class ApplicationServices {
     archiveProduct: adminProducts.archiveProduct,
     bulkUpdateProducts: adminProducts.bulkUpdateProducts,
     changePublication: adminProducts.changePublication,
+    createProduct: adminProducts.createProduct,
     duplicateProduct: adminProducts.duplicateProduct,
     getAdminProduct: adminProducts.getAdminProduct,
     listAdminProducts: adminProducts.listAdminProducts,
@@ -93,7 +123,6 @@ export class ApplicationServices {
     updateItem: carts.updateItem,
   };
   readonly catalog = {
-    createProduct: catalog.createProduct,
     getCategory: catalog.getCategory,
     getCollection: catalog.getCollection,
     getProduct: catalog.getProduct,
@@ -166,6 +195,13 @@ export class ApplicationServices {
     updateMedia: media.updateMedia,
     uploadMedia: media.uploadMedia,
   };
+  readonly staffNotifications = {
+    listStaffNotifications: staffNotifications.listStaffNotifications,
+    markAllStaffNotificationsRead:
+      staffNotifications.markAllStaffNotificationsRead,
+    setStaffNotificationRead: staffNotifications.setStaffNotificationRead,
+    staffNotificationSummary: staffNotifications.staffNotificationSummary,
+  };
   readonly operations = {
     archiveWebhook: operations.archiveWebhook,
     cancelExport: operations.cancelExport,
@@ -199,6 +235,12 @@ export class ApplicationServices {
     listOrders: orders.listOrders,
     quote: orders.quote,
     trackOrder: orders.trackOrder,
+  };
+  readonly manualPayments = {
+    listManualPayments: manualPayments.listManualPayments,
+    rejectManualPayment: manualPayments.rejectManualPayment,
+    submitManualPayment: manualPayments.submitManualPayment,
+    verifyManualPayment: manualPayments.verifyManualPayment,
   };
   readonly payments = {
     processBkashCallback: payments.processBkashCallback,
@@ -269,16 +311,28 @@ export class ApplicationServices {
     updateStaffProfile: staff.updateStaffProfile,
   };
   readonly taxonomies = {
+    archiveSizeChart: taxonomies.archiveSizeChart,
     archiveTaxonomy: taxonomies.archiveTaxonomy,
     attributeUsage: taxonomies.attributeUsage,
     createAttribute: taxonomies.createAttribute,
+    createAttributeValue: taxonomies.createAttributeValue,
+    createSizeChart: taxonomies.createSizeChart,
     createTaxonomy: taxonomies.createTaxonomy,
+    getSizeChart: taxonomies.getSizeChart,
     getTaxonomy: taxonomies.getTaxonomy,
     listAdminAttributes: taxonomies.listAdminAttributes,
+    listSizeCharts: taxonomies.listSizeCharts,
     listTaxonomies: taxonomies.listTaxonomies,
     reorderTaxonomies: taxonomies.reorderTaxonomies,
     restoreTaxonomy: taxonomies.restoreTaxonomy,
+    updateAttribute: taxonomies.updateAttribute,
+    updateAttributeValue: taxonomies.updateAttributeValue,
+    updateSizeChart: taxonomies.updateSizeChart,
     updateTaxonomy: taxonomies.updateTaxonomy,
+  };
+  readonly productCsv = {
+    exportProductsCsv: productCsv.exportProductsCsv,
+    importProductsCsv: productCsv.importProductsCsv,
   };
   readonly users = {
     createAddress: users.createAddress,

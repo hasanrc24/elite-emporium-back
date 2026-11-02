@@ -1,5 +1,6 @@
 import { createDecipheriv } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { Writable } from "node:stream";
 import { open, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
@@ -22,12 +23,25 @@ await handle.read(tag, 0, 16, info.size - 16);
 await handle.close();
 if (header.subarray(0, 8).toString() !== "EEBACK01")
   throw new Error("Unsupported backup format.");
-const decipher = createDecipheriv(
-  "aes-256-gcm",
-  Buffer.from(env.ENCRYPTION_MASTER_KEY, "hex"),
-  header.subarray(8),
+const decipher = () => {
+  const value = createDecipheriv(
+    "aes-256-gcm",
+    Buffer.from(env.ENCRYPTION_MASTER_KEY, "hex"),
+    header.subarray(8),
+  );
+  value.setAuthTag(tag);
+  return value;
+};
+const ciphertext = () =>
+  createReadStream(file, { start: 20, end: info.size - 17 });
+// GCM authenticates only at the end of the stream, so verify the whole file
+// before any decrypted SQL reaches the database.
+await pipeline(
+  ciphertext(),
+  decipher(),
+  createGunzip(),
+  new Writable({ write: (_chunk, _encoding, done) => done() }),
 );
-decipher.setAuthTag(tag);
 const mysql = spawn(
   "mysql",
   [
@@ -37,18 +51,16 @@ const mysql = spawn(
     String(env.DB_PORT),
     "--user",
     env.DB_USER,
-    `--password=${env.DB_PASSWORD}`,
     env.DB_NAME,
   ],
-  { stdio: ["pipe", "inherit", "inherit"] },
+  {
+    stdio: ["pipe", "inherit", "inherit"],
+    // MYSQL_PWD keeps the password out of the world-readable process list.
+    env: { ...process.env, MYSQL_PWD: env.DB_PASSWORD },
+  },
 );
 await Promise.all([
-  pipeline(
-    createReadStream(file, { start: 20, end: info.size - 17 }),
-    decipher,
-    createGunzip(),
-    mysql.stdin,
-  ),
+  pipeline(ciphertext(), decipher(), createGunzip(), mysql.stdin),
   new Promise<void>((resolve, reject) => {
     mysql.once("error", reject);
     mysql.once("exit", (code) =>

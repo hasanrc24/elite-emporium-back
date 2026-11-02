@@ -21,6 +21,21 @@ import { newId } from "../../lib/ids.js";
 import { moneyString } from "../../lib/money.js";
 import { recordAudit } from "../audits/audit.service.js";
 import { addDomainEvent } from "../events/outbox.service.js";
+import { resolveLowStockThreshold } from "../inventory/low-stock.js";
+import {
+  assertCostAccess,
+  assertVariantKeysFree,
+  globalLowStockThreshold,
+  setVariantAttributeValues,
+} from "./admin-product.service.js";
+
+/** BE-CAT-002: guard against accidentally generating thousands of rows. */
+const MAX_MATRIX_COMBINATIONS = 250;
+
+interface AdminAccess {
+  cost: boolean;
+  publish: boolean;
+}
 
 function cartesian(groups: RuntimeValue) {
   return groups.reduce(
@@ -125,10 +140,10 @@ async function loadMatrixContext(
     (total: RuntimeValue, group: RuntimeValue) => total * group.length,
     1,
   );
-  if (combinationCount > 250)
+  if (combinationCount > MAX_MATRIX_COMBINATIONS)
     throw AppError.unprocessable(
       "VARIANT_MATRIX_TOO_LARGE",
-      "A variant matrix can contain at most 250 combinations.",
+      `A variant matrix can contain at most ${MAX_MATRIX_COMBINATIONS} combinations; this selection produces ${combinationCount}.`,
     );
   return { product, attributes, groups };
 }
@@ -211,7 +226,11 @@ export async function previewVariantMatrix(
   };
 }
 
-function variantData(row: RuntimeValue) {
+function variantData(
+  row: RuntimeValue,
+  access: AdminAccess,
+  current: RuntimeValue = null,
+) {
   return {
     sku: row.sku,
     barcode: row.barcode || null,
@@ -220,7 +239,13 @@ function variantData(row: RuntimeValue) {
     combinationSignature: row.signature,
     regularPrice: row.regularPrice,
     salePrice: row.salePrice || null,
-    costPrice: row.costPrice || null,
+    costPrice: access.cost
+      ? row.costPrice || null
+      : (current?.costPrice ?? null),
+    lowStockThreshold:
+      row.lowStockThreshold === undefined
+        ? (current?.lowStockThreshold ?? null)
+        : row.lowStockThreshold,
     saleStartsAt: row.saleStartsAt || null,
     saleEndsAt: row.saleEndsAt || null,
     stockPolicy: row.stockPolicy,
@@ -228,8 +253,8 @@ function variantData(row: RuntimeValue) {
     preorderMessage: row.preorderMessage || null,
     weightGrams: row.weightGrams ?? null,
     dimensions: row.dimensions || null,
-    status: "active",
-    active: true,
+    status: current?.status ?? "active",
+    active: current ? current.active : true,
   };
 }
 
@@ -239,7 +264,9 @@ export async function commitVariantMatrix(
   actorId: RuntimeValue,
   idempotencyKey: RuntimeValue,
   request: RuntimeValue,
+  access: AdminAccess,
 ) {
+  assertCostAccess(payload.rows, access);
   if (!idempotencyKey)
     throw AppError.badRequest(
       "IDEMPOTENCY_KEY_REQUIRED",
@@ -314,6 +341,25 @@ export async function commitVariantMatrix(
         .map((variant: RuntimeValue) => variant.combinationSignature)
         .filter(Boolean),
     );
+    // Variants saved through the product editor store a `key:value`
+    // combinationSignature, so also compare the attribute-value signature the
+    // preview uses to avoid creating duplicate combinations.
+    const existingWithValues: RuntimeValue = await ProductVariant.findAll({
+      where: { productId },
+      paranoid: false,
+      attributes: ["id"],
+      include: [
+        {
+          model: AttributeValue,
+          as: "attributeValues",
+          through: { attributes: [] },
+        },
+      ],
+      transaction,
+    });
+    for (const variant of existingWithValues)
+      if (variant.attributeValues?.length)
+        existingSignatures.add(valueSignature(variant.attributeValues));
     const valueIds: RuntimeValue = [
       ...new Set(
         payload.rows.flatMap((row: RuntimeValue) => row.attributeValueIds),
@@ -328,6 +374,35 @@ export async function commitVariantMatrix(
         "INVALID_ATTRIBUTE_VALUE",
         "One or more variation values are unavailable.",
       );
+    const valueById: RuntimeValue = new Map(
+      values.map((value: RuntimeValue) => [value.id, value]),
+    );
+    const attributeRows: RuntimeValue = await Attribute.findAll({
+      where: {
+        id: {
+          [Op.in]: [
+            ...new Set(values.map((value: RuntimeValue) => value.attributeId)),
+          ],
+        },
+      },
+      attributes: ["id", "key"],
+      transaction,
+    });
+    const attributeKeyById: RuntimeValue = new Map(
+      attributeRows.map((row: RuntimeValue) => [row.id, row.key]),
+    );
+    if (
+      payload.rows.some(
+        (row: RuntimeValue) =>
+          valueSignature(
+            row.attributeValueIds.map((id: RuntimeValue) => valueById.get(id)),
+          ) !== row.signature,
+      )
+    )
+      throw AppError.unprocessable(
+        "VARIANT_PREVIEW_MISMATCH",
+        "Committed attribute values must match the previewed combination.",
+      );
     const location: RuntimeValue = await StockLocation.findOne({
       where: { active: true },
       order: [["createdAt", "ASC"]],
@@ -339,16 +414,26 @@ export async function commitVariantMatrix(
         "STOCK_LOCATION_REQUIRED",
         "Create an active stock location before adding variants.",
       );
+    const globalThreshold = await globalLowStockThreshold(transaction);
+    // Rows that will actually be created must not collide on SKU/barcode.
+    const sortedRows: RuntimeValue[] = [...payload.rows].sort(
+      (left: RuntimeValue, right: RuntimeValue) =>
+        left.signature.localeCompare(right.signature),
+    );
+    await assertVariantKeysFree(
+      sortedRows.filter(
+        (row: RuntimeValue) => !existingSignatures.has(row.signature),
+      ),
+      transaction,
+      "rows",
+    );
     const hasDefault: RuntimeValue = existing.some(
       (variant: RuntimeValue) =>
         variant.isDefault && variant.active && variant.status === "active",
     );
     const created: RuntimeValue = [];
     const skipped: RuntimeValue = [];
-    for (const row of payload.rows.sort(
-      (left: RuntimeValue, right: RuntimeValue) =>
-        left.signature.localeCompare(right.signature),
-    )) {
+    for (const row of sortedRows) {
       if (existingSignatures.has(row.signature)) {
         skipped.push(row.signature);
         continue;
@@ -357,14 +442,26 @@ export async function commitVariantMatrix(
         {
           id: newId(),
           productId,
-          ...variantData(row),
+          ...variantData(row, access),
+          // Attribute labels come from the stored values, not the client.
+          attributes: Object.fromEntries(
+            row.attributeValueIds.map((valueId: string) => {
+              const value = valueById.get(valueId);
+              return [attributeKeyById.get(value.attributeId), value.value];
+            }),
+          ),
           isDefault: !hasDefault && created.length === 0,
           version: 1,
         },
         { transaction },
       );
-      await variant.setAttributeValues(row.attributeValueIds, { transaction });
-      const onHand: RuntimeValue = row.stockPolicy === "available" ? 0 : Number(row.initialStock || 0);
+      await setVariantAttributeValues(
+        variant.id,
+        row.attributeValueIds,
+        transaction,
+      );
+      const onHand: RuntimeValue =
+        row.stockPolicy === "available" ? 0 : Number(row.initialStock || 0);
       await InventoryLevel.create(
         {
           id: newId(),
@@ -372,7 +469,11 @@ export async function commitVariantMatrix(
           locationId: location.id,
           onHand,
           reserved: 0,
-          lowStockThreshold: row.lowStockThreshold,
+          lowStockThreshold: resolveLowStockThreshold({
+            variant: row.lowStockThreshold,
+            product: product.lowStockThreshold,
+            global: globalThreshold,
+          }),
           version: 1,
         },
         { transaction },
@@ -453,15 +554,32 @@ export async function updateVariant(
   payload: RuntimeValue,
   actorId: RuntimeValue,
   request: RuntimeValue,
+  access: AdminAccess,
 ) {
+  assertCostAccess([payload], access);
   return sequelize.transaction(async (transaction: RuntimeValue) => {
+    // Lock order is product, then variant, everywhere in the catalog.
+    const owner: RuntimeValue = await ProductVariant.findByPk(id, {
+      paranoid: false,
+      attributes: ["id", "productId"],
+      transaction,
+    });
+    if (!owner) throw AppError.notFound("Variant not found.");
+    const product: RuntimeValue = await Product.findByPk(owner.productId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!product)
+      throw AppError.conflict(
+        "PRODUCT_ARCHIVED",
+        "Restore this product before editing its variants.",
+      );
     const variant: RuntimeValue = await ProductVariant.findByPk(id, {
       paranoid: false,
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
-    if (!variant) throw AppError.notFound("Variant not found.");
-    if (variant.deletedAt)
+    if (variant.deletedAt || variant.status === "archived")
       throw AppError.conflict(
         "VARIANT_ARCHIVED",
         "Restore this variant before editing it.",
@@ -471,10 +589,17 @@ export async function updateVariant(
         "VERSION_CONFLICT",
         "This variant changed. Refresh and review the latest version.",
       );
-    const product: RuntimeValue = await Product.findByPk(variant.productId, {
+    await assertVariantKeysFree(
+      [{ id: variant.id, sku: payload.sku, barcode: payload.barcode }],
       transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
+      "",
+    );
+    if (variant.isDefault && !payload.isDefault)
+      throw AppError.unprocessable(
+        "DEFAULT_VARIANT_REQUIRED",
+        "Make another variant the default instead of unsetting this one.",
+        { isDefault: ["Choose another default variant instead."] },
+      );
     const location: RuntimeValue = await StockLocation.findOne({
       where: { active: true },
       order: [["createdAt", "ASC"]],
@@ -497,19 +622,25 @@ export async function updateVariant(
     };
     await variant.update(
       {
-        ...variantData({
-          ...payload,
-          signature: payload.signature || variant.combinationSignature,
-        }),
+        ...variantData(
+          {
+            ...payload,
+            signature: payload.signature || variant.combinationSignature,
+          },
+          access,
+          variant,
+        ),
         isDefault: payload.isDefault,
         version: variant.version + 1,
       },
       { transaction },
     );
     if (payload.attributeValueIds)
-      await variant.setAttributeValues(payload.attributeValueIds, {
+      await setVariantAttributeValues(
+        variant.id,
+        payload.attributeValueIds,
         transaction,
-      });
+      );
     if (payload.isDefault) {
       await ProductVariant.update(
         { isDefault: false },
@@ -537,14 +668,7 @@ export async function updateVariant(
       const delta = Number(payload.initialStock) - Number(level.onHand);
       if (delta !== 0) {
         const nextOnHand = Number(level.onHand) + delta;
-        if (nextOnHand < 0)
-          throw AppError.unprocessable(
-            "NEGATIVE_INVENTORY",
-            "This adjustment would make on-hand inventory negative.",
-          );
         level.onHand = nextOnHand;
-        if (payload.lowStockThreshold != null)
-          level.lowStockThreshold = payload.lowStockThreshold;
         level.version += 1;
         await level.save({ transaction });
         await InventoryMovement.create(
@@ -565,6 +689,16 @@ export async function updateVariant(
         );
       }
     }
+    // Keep every level's threshold equal to variant > product > global.
+    const resolvedThreshold = resolveLowStockThreshold({
+      variant: variant.lowStockThreshold,
+      product: product.lowStockThreshold,
+      global: await globalLowStockThreshold(transaction),
+    });
+    await InventoryLevel.update(
+      { lowStockThreshold: resolvedThreshold },
+      { where: { variantId: variant.id }, transaction },
+    );
     product.version += 1;
     await product.save({ transaction });
     const after: RuntimeValue = {
@@ -600,11 +734,26 @@ export async function archiveVariant(
   request: RuntimeValue,
 ) {
   return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const owner: RuntimeValue = await ProductVariant.findByPk(id, {
+      attributes: ["id", "productId"],
+      transaction,
+    });
+    if (!owner) throw AppError.notFound("Variant not found.");
+    const product: RuntimeValue = await Product.findByPk(owner.productId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!product) throw AppError.notFound("Product not found.");
     const variant: RuntimeValue = await ProductVariant.findByPk(id, {
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
     if (!variant) throw AppError.notFound("Variant not found.");
+    if (variant.status === "archived")
+      throw AppError.conflict(
+        "VARIANT_ARCHIVED",
+        "This variant is already archived.",
+      );
     if (Number(version) !== Number(variant.version))
       throw AppError.conflict(
         "VERSION_CONFLICT",
@@ -623,10 +772,6 @@ export async function archiveVariant(
         "VARIANT_HAS_RESERVATIONS",
         "This variant has active order reservations.",
       );
-    const product: RuntimeValue = await Product.findByPk(variant.productId, {
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
     const activeSiblings: RuntimeValue = await ProductVariant.findAll({
       where: {
         productId: product.id,
@@ -677,22 +822,32 @@ export async function restoreVariant(
   request: RuntimeValue,
 ) {
   return sequelize.transaction(async (transaction: RuntimeValue) => {
+    const owner: RuntimeValue = await ProductVariant.findByPk(id, {
+      paranoid: false,
+      attributes: ["id", "productId"],
+      transaction,
+    });
+    if (!owner) throw AppError.notFound("Variant not found.");
+    const product: RuntimeValue = await Product.findByPk(owner.productId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!product)
+      throw AppError.conflict(
+        "PRODUCT_ARCHIVED",
+        "Restore this product before restoring its variants.",
+      );
     const variant: RuntimeValue = await ProductVariant.findByPk(id, {
       paranoid: false,
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
-    if (!variant) throw AppError.notFound("Variant not found.");
     if (variant.deletedAt) await variant.restore({ transaction });
     if (variant.status === "active" && variant.active)
       throw AppError.conflict(
         "VARIANT_NOT_ARCHIVED",
         "This variant is already active.",
       );
-    const product: RuntimeValue = await Product.findByPk(variant.productId, {
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
     const hasDefault: RuntimeValue = await ProductVariant.count({
       where: {
         productId: product.id,

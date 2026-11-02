@@ -122,7 +122,7 @@ export class AdminOperationsController {
   route5(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) =>
       res.json({
-        data: await this.services.operations.getExport(req.params.id),
+        data: await this.services.operations.getExport(req.params.id, req),
         meta: null,
         requestId: req.id,
       }))(request, response);

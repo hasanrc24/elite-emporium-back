@@ -16,12 +16,20 @@ function isPrivateAddress(address: string): boolean {
       a === 10 ||
       a === 127 ||
       a === 0 ||
+      a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
       (a === 192 && b === 168)
     );
   }
   const normalized = address.toLowerCase();
+  // IPv4-mapped/translated IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:7f00:1)
+  // reaches the embedded IPv4 host; check it as IPv4 or reject outright.
+  const mapped = /^(?:(?:0{1,4}:){5}|::)ffff:(?:0{1,4}:)?(.+)$/.exec(
+    normalized,
+  );
+  if (mapped) return net.isIPv4(mapped[1]) ? isPrivateAddress(mapped[1]) : true;
   return (
     normalized === "::1" ||
     normalized === "::" ||

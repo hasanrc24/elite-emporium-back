@@ -13,6 +13,7 @@
   "scripts": {
     "build": "node scripts/clean-dist.ts && tsc --project tsconfig.json && node scripts/copy-assets.ts",
     "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/worker.ts",
     "start": "node dist/src/server.js",
     "worker": "node dist/src/worker.js",
     "format:check": "prettier --check .",
@@ -40,6 +41,7 @@
       "src/worker.ts",
       "src/db/migrate.ts",
       "src/db/seed.ts",
+      "src/db/seed-demo.ts",
       "scripts/*.ts",
       "tests/**/*.js"
     ],

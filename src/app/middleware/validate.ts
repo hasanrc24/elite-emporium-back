@@ -23,5 +23,12 @@ export function validateRequest(
       fieldErrors,
     );
   }
-  request[source] = result.data;
+  // Express 5 exposes req.query as a getter-only prototype property, so plain
+  // assignment throws; shadow it with an own property holding the parsed data.
+  Object.defineProperty(request, source, {
+    value: result.data,
+    writable: true,
+    configurable: true,
+    enumerable: true,
+  });
 }

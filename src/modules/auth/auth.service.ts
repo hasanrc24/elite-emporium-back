@@ -1,4 +1,5 @@
 import { randomBytes, randomInt } from "node:crypto";
+import { ipPrefix } from "../../lib/ip-prefix.js";
 import argon2 from "argon2";
 import { generateSecret, generateURI, verify as verifyOtp } from "otplib";
 import QRCode from "qrcode";
@@ -114,17 +115,15 @@ async function claimGuestOrders(
   return rows.length;
 }
 
-function ipPrefix(value: RuntimeValue) {
-  const ip: RuntimeValue = String(value || "").replace(/^::ffff:/, "");
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip))
-    return `${ip.split(".").slice(0, 3).join(".")}.0/24`;
-  if (ip.includes(":")) return `${ip.split(":").slice(0, 4).join(":")}::/64`;
-  return ip.slice(0, 64) || null;
-}
-
 export async function hashPassword(password: RuntimeValue) {
   return argon2.hash(password, passwordOptions);
 }
+
+// Verified against when no account matches so unknown identifiers cost the
+// same Argon2 work as wrong passwords (prevents login timing enumeration).
+let dummyPasswordHash: ReturnType<typeof hashPassword> | undefined;
+const getDummyPasswordHash = () =>
+  (dummyPasswordHash ||= hashPassword(randomBytes(32).toString("base64url")));
 
 async function createTokenPair(
   user: RuntimeValue,
@@ -303,7 +302,11 @@ export async function login(payload: RuntimeValue, context: RuntimeValue) {
     where: { ...identifier, status: "active" },
     include: userAuthInclude,
   });
-  if (!user || !(await argon2.verify(user.passwordHash, payload.password)))
+  const passwordValid: RuntimeValue = await argon2.verify(
+    user ? user.passwordHash : await getDummyPasswordHash(),
+    payload.password,
+  );
+  if (!user || !passwordValid)
     throw AppError.unauthorized(
       "INVALID_CREDENTIALS",
       "Phone/email or password is incorrect.",
@@ -611,7 +614,10 @@ export async function forgotPassword(
       locale: user.locale,
       recipient: phone || email!,
       payload: {
-        secure: encryptSecret({ token }),
+        secure: encryptSecret({
+          token,
+          resetUrl: `${env.PUBLIC_ORIGIN}/${user.locale || "en"}/reset-password?token=${encodeURIComponent(token)}`,
+        }),
         expiresAt: expiresAt.toISOString(),
         name: user.name,
       },

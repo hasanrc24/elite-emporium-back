@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Inject,
+  Header,
   Patch,
   Post,
   Req,
@@ -10,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { z } from "zod";
 import type { Request, Response } from "express";
+import { money } from "../../lib/money.js";
 import { ApplicationServices } from "../../app/application-services.js";
 import {
   AccessTokenGuard,
@@ -18,6 +20,7 @@ import {
   ValidateRequest,
 } from "../../app/request-security.js";
 import {
+  createProductSchema,
   productMoneySchema,
   productSlugSchema,
   updateProductSchema,
@@ -68,13 +71,20 @@ const matrixRow = z
       })
       .nullable()
       .optional(),
-    initialStock: z.number().int().min(0).max(1_000_000).default(0),
-    lowStockThreshold: z.number().int().min(0).max(1_000_000).default(3),
+    // Optional: PATCH /variants/:id must not reset stock when it is omitted.
+    initialStock: z.number().int().min(0).max(1_000_000).optional(),
+    lowStockThreshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(1_000_000)
+      .nullable()
+      .optional(),
   })
   .superRefine((value, context) => {
     if (
       value.salePrice != null &&
-      Number(value.salePrice) >= Number(value.regularPrice)
+      money(value.salePrice).greaterThanOrEqualTo(money(value.regularPrice))
     )
       context.addIssue({
         code: "custom",
@@ -84,7 +94,7 @@ const matrixRow = z
     if (
       value.saleStartsAt &&
       value.saleEndsAt &&
-      value.saleStartsAt >= value.saleEndsAt
+      Date.parse(value.saleStartsAt) >= Date.parse(value.saleEndsAt)
     )
       context.addIssue({
         code: "custom",
@@ -92,6 +102,17 @@ const matrixRow = z
         message: "Sale end must be after sale start.",
       });
   });
+
+/** Permissions beyond catalog.manage that change what a request may see or do. */
+const accessOf = (request: Request) => ({
+  cost: request.auth.permissions.has("catalog.cost"),
+  publish: request.auth.permissions.has("catalog.publish"),
+});
+
+const csvImport = z.object({
+  csv: z.string().min(1).max(5_000_000),
+  dryRun: z.boolean().default(true),
+});
 
 @Controller("admin")
 export class AdminProductController {
@@ -108,6 +129,72 @@ export class AdminProductController {
         req.query,
       );
       res.json({ ...result, requestId: req.id });
+    })(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.manage")
+  @ValidateRequest(createProductSchema)
+  @Post("/products")
+  routeCreate(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) => {
+      res.status(201).json({
+        data: await this.services.adminProducts.createProduct(
+          req.body,
+          req.auth.user.id,
+          req,
+          accessOf(req),
+        ),
+        meta: null,
+        requestId: req.id,
+      });
+    })(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.export")
+  @Header("Content-Type", "text/csv; charset=utf-8")
+  @Get("/products/export")
+  routeExport(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) => {
+      const csv = await this.services.productCsv.exportProductsCsv(
+        req.query,
+        accessOf(req),
+      );
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="products.csv"',
+      );
+      res.send(csv);
+    })(request, response);
+  }
+
+  @UseGuards(AccessTokenGuard, PermissionGuard)
+  @Permissions("catalog.import", "catalog.manage")
+  @ValidateRequest(csvImport)
+  @Post("/products/import")
+  routeImport(
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<unknown> {
+    return (async (req, res) => {
+      res.json({
+        data: await this.services.productCsv.importProductsCsv(
+          req.body,
+          req.auth.user.id,
+          req.get("idempotency-key"),
+          req,
+          accessOf(req),
+        ),
+        meta: null,
+        requestId: req.id,
+      });
     })(request, response);
   }
 
@@ -144,6 +231,7 @@ export class AdminProductController {
           req.body,
           req.auth.user.id,
           req,
+          accessOf(req),
         ),
         meta: null,
         requestId: req.id,
@@ -157,7 +245,10 @@ export class AdminProductController {
   route2(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
       res.json({
-        data: await this.services.adminProducts.getAdminProduct(req.params.id),
+        data: await this.services.adminProducts.getAdminProduct(
+          req.params.id,
+          accessOf(req),
+        ),
         meta: null,
         requestId: req.id,
       });
@@ -176,6 +267,7 @@ export class AdminProductController {
           req.body,
           req.auth.user.id,
           req,
+          accessOf(req),
         ),
         meta: null,
         requestId: req.id,
@@ -201,6 +293,7 @@ export class AdminProductController {
           req.body,
           req.auth.user.id,
           req,
+          accessOf(req),
         ),
         meta: null,
         requestId: req.id,
@@ -209,7 +302,7 @@ export class AdminProductController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("catalog.manage")
+  @Permissions("catalog.manage", "catalog.publish")
   @ValidateRequest(z.object({ version: z.number().int().positive() }))
   @Post("/products/:id/archive")
   route5(@Req() request: Request, @Res() response: Response): Promise<unknown> {
@@ -225,7 +318,7 @@ export class AdminProductController {
   }
 
   @UseGuards(AccessTokenGuard, PermissionGuard)
-  @Permissions("catalog.manage")
+  @Permissions("catalog.manage", "catalog.publish")
   @Post("/products/:id/restore")
   route6(@Req() request: Request, @Res() response: Response): Promise<unknown> {
     return (async (req, res) => {
@@ -234,6 +327,7 @@ export class AdminProductController {
           req.params.id,
           req.auth.user.id,
           req,
+          accessOf(req),
         ),
         meta: null,
         requestId: req.id,
@@ -264,6 +358,7 @@ export class AdminProductController {
           req.body,
           req.auth.user.id,
           req,
+          accessOf(req),
         ),
         meta: null,
         requestId: req.id,
@@ -305,6 +400,7 @@ export class AdminProductController {
         req.auth.user.id,
         req.get("idempotency-key"),
         req,
+        accessOf(req),
       );
       res.status(201).json({ data, meta: null, requestId: req.id });
     })(request, response);
@@ -332,6 +428,7 @@ export class AdminProductController {
           req.body,
           req.auth.user.id,
           req,
+          accessOf(req),
         ),
         meta: null,
         requestId: req.id,

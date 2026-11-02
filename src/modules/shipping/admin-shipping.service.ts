@@ -9,6 +9,7 @@ import {
 import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
+import { likeContains } from "../../lib/like.js";
 import { moneyString } from "../../lib/money.js";
 import { dateRangeWhere } from "../../lib/date-range.js";
 import { recordAudit } from "../audits/audit.service.js";
@@ -299,7 +300,7 @@ export async function listShipments(query: RuntimeValue) {
         where: query.search
           ? {
               reference: {
-                [Op.like]: `%${String(query.search).slice(0, 80)}%`,
+                [Op.like]: likeContains(query.search, 80),
               },
             }
           : undefined,
@@ -323,7 +324,11 @@ export async function createShipment(
       lock: transaction.LOCK.UPDATE,
     });
     if (!order) throw AppError.notFound("Order not found.");
-    if (["cancelled", "failed"].includes(order.orderStatus))
+    if (
+      ["draft", "pending_payment", "cancelled", "failed"].includes(
+        order.orderStatus,
+      )
+    )
       throw AppError.conflict(
         "ORDER_NOT_SHIPPABLE",
         "This order cannot be shipped.",

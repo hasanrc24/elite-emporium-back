@@ -18,9 +18,12 @@ const localizedText: RuntimeValue = z.object({
   en: z.string().trim().min(1).max(255),
   bn: z.string().trim().min(1).max(255),
 });
+// z.string().url() accepts javascript: and data: URLs; these values are
+// rendered as storefront links, so only web URLs are allowed.
+const webUrl = () => z.url({ protocol: /^https?$/ }).max(1000);
 const optionalUrl: RuntimeValue = z.preprocess(
   (value) => (value === "" ? null : value),
-  z.string().url().max(1000).nullable().optional(),
+  webUrl().nullable().optional(),
 );
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -50,6 +53,10 @@ const schemas: RuntimeValue = {
       .default(""),
     address: z.string().max(1000).optional().default(""),
     whatsappUrl: optionalUrl,
+    messengerUrl: optionalUrl,
+    tradeLicenseNumber: z.string().trim().max(80).optional().default(""),
+    dbid: z.string().trim().max(80).optional().default(""),
+    bin: z.string().trim().max(80).optional().default(""),
     logo: z
       .object({
         mediaId: z.string().length(26),
@@ -63,7 +70,7 @@ const schemas: RuntimeValue = {
       .array(
         z.object({
           label: z.string().max(80),
-          url: z.string().url().max(1000),
+          url: webUrl(),
         }),
       )
       .max(20)
@@ -89,6 +96,42 @@ const schemas: RuntimeValue = {
     showExactStock: z.boolean().default(true),
     reservationMinutes: z.number().int().min(5).max(120).default(15),
   }),
+  // Publication rules for products (BR-CAT-003, BE-CAT-004).
+  catalog: z.object({
+    minProductImages: z.number().int().min(1).max(20).default(4),
+  }),
+  delivery: z.object({
+    estimates: z
+      .record(
+        z.string().regex(/^[a-z0-9_]{1,60}$/),
+        z.object({
+          en: z.string().trim().max(80),
+          bn: z.string().trim().max(80),
+        }),
+      )
+      .default({}),
+    refundTimelineDays: z.number().int().min(1).max(60).default(10),
+  }),
+  confirmation: z.object({
+    enabled: z.boolean().default(true),
+    maxAttempts: z.number().int().min(1).max(10).default(3),
+    maxPendingHours: z.number().int().min(1).max(240).default(48),
+    duplicateWindowMinutes: z.number().int().min(0).max(1440).default(60),
+    smsLinkEnabled: z.boolean().default(false),
+    linkTtlHours: z.number().int().min(1).max(72).default(24),
+  }),
+  risk: z.object({
+    enabled: z.boolean().default(true),
+    mediumScore: z.number().int().min(1).max(100).default(30),
+    highScore: z.number().int().min(1).max(100).default(60),
+    highRiskAction: z
+      .enum(["require_confirmation", "block_cod", "block_order"])
+      .default("require_confirmation"),
+    newCustomerHighValue: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/)
+      .default("5000.00"),
+  }),
   checkout: z.object({
     termsPageSlug: z.string().max(180).default("terms"),
     orderNotesEnabled: z.boolean().default(true),
@@ -112,6 +155,28 @@ const schemas: RuntimeValue = {
     windowDays: z.number().int().min(0).max(365).default(7),
     guestReturns: z.boolean().default(true),
     excludedProductIds: z.array(z.string().length(26)).max(1000).default([]),
+    exchangeHoldHours: z.number().int().min(1).max(720).default(72),
+    holdOn: z.enum(["request", "approval"]).default("request"),
+  }),
+  manualWallet: z.object({
+    enabled: z.boolean().default(false),
+    accounts: z
+      .array(
+        z.object({
+          provider: z.enum(["bkash", "nagad", "rocket", "upay"]),
+          number: z.string().trim().min(10).max(20),
+          accountType: z.enum(["personal", "agent", "merchant"]).optional(),
+        }),
+      )
+      .max(8)
+      .default([])
+      .refine(
+        (accounts) =>
+          new Set(accounts.map((account) => account.provider)).size ===
+          accounts.length,
+        "Each wallet provider can be listed once.",
+      ),
+    instructions: localizedText.optional(),
   }),
   reviews: z.object({
     enabled: z.boolean().default(true),
@@ -151,6 +216,10 @@ export const defaultPublicSettings: RuntimeValue = {
     contactEmail: "",
     address: "",
     whatsappUrl: null,
+    messengerUrl: null,
+    tradeLicenseNumber: "",
+    dbid: "",
+    bin: "",
     logo: null,
     socialLinks: [],
   },
@@ -165,6 +234,32 @@ export const defaultPublicSettings: RuntimeValue = {
     lowStockThreshold: 3,
     showExactStock: true,
     reservationMinutes: 15,
+  },
+  catalog: {
+    minProductImages: 4,
+  },
+  delivery: {
+    estimates: {
+      inside_dhaka: { en: "1–2 days", bn: "১–২ দিন" },
+      dhaka_suburb: { en: "2–3 days", bn: "২–৩ দিন" },
+      outside_dhaka: { en: "3–5 days", bn: "৩–৫ দিন" },
+    },
+    refundTimelineDays: 10,
+  },
+  confirmation: {
+    enabled: true,
+    maxAttempts: 3,
+    maxPendingHours: 48,
+    duplicateWindowMinutes: 60,
+    smsLinkEnabled: false,
+    linkTtlHours: 24,
+  },
+  risk: {
+    enabled: true,
+    mediumScore: 30,
+    highScore: 60,
+    highRiskAction: "require_confirmation",
+    newCustomerHighValue: "5000.00",
   },
   checkout: {
     termsPageSlug: "terms",
@@ -182,7 +277,10 @@ export const defaultPublicSettings: RuntimeValue = {
     windowDays: 7,
     guestReturns: true,
     excludedProductIds: [],
+    exchangeHoldHours: 72,
+    holdOn: "request",
   },
+  manualWallet: { enabled: false, accounts: [] },
   reviews: {
     enabled: true,
     moderationRequired: true,
@@ -211,12 +309,13 @@ export const defaultPublicSettings: RuntimeValue = {
     cod: { enabled: true, default: true },
     bkash: { enabled: false },
   },
+  // Warm-neutral fashion palette (FE-DESIGN-002).
   theme: {
-    primary: "#6f1d46",
-    accent: "#d4a373",
-    background: "#fffaf7",
-    text: "#24151d",
-    radius: "0.75rem",
+    primary: "#111111",
+    accent: "#a87b4f",
+    background: "#ffffff",
+    text: "#111111",
+    radius: "0.25rem",
   },
 };
 
@@ -225,9 +324,11 @@ const publicGroups = new Set([
   "ordering",
   "inventory",
   "checkout",
+  "delivery",
   "tax",
   "verification",
   "returns",
+  "manualWallet",
   "reviews",
   "analytics",
   "seo",
@@ -244,14 +345,22 @@ export async function getPublicSettings() {
         where: { provider: "bkash", environment: env.BKASH_MODE },
       }),
     ]);
+  // Start from public groups only: defaults for private groups (risk rules,
+  // confirmation policy, notification switches) must never reach the browser.
   const settings: Record<
     string,
     ReturnType<typeof JSON.parse>
-  > = structuredClone(defaultPublicSettings);
+  > = structuredClone(
+    Object.fromEntries(
+      Object.entries(defaultPublicSettings).filter(([key]) =>
+        isPublicSettingGroup(key),
+      ),
+    ),
+  );
   for (const row of rows) {
     if (publicGroups.has(row.key) || row.key === "theme") {
       const value = row.value;
-      settings[row.key] = typeof value === 'string' ? JSON.parse(value) : value;
+      settings[row.key] = typeof value === "string" ? JSON.parse(value) : value;
     }
   }
   settings.shippingMethods = shippingMethods.map((method: RuntimeValue) => ({
@@ -280,8 +389,29 @@ export async function getPublicSettings() {
     requirePhoneVerification: settings.verification.requirePhoneVerification,
     requireEmailVerification: settings.verification.requireEmailVerification,
     taxEnabled: settings.tax.enabled,
+    orderConfirmation: Boolean((await settingValue("confirmation"))?.enabled),
   };
   return settings;
+}
+
+export function isPublicSettingGroup(key: string) {
+  return publicGroups.has(key) || key === "theme";
+}
+
+/** Effective value of one settings group: stored value merged over defaults. */
+export async function settingValue(
+  key: string,
+  transaction: RuntimeValue = null,
+): Promise<RuntimeValue> {
+  const row: RuntimeValue = await StoreSetting.findOne({
+    where: { key },
+    transaction,
+  });
+  const raw = row?.value ?? null;
+  return mergeSettingValues(
+    (defaultPublicSettings as Record<string, unknown>)[key],
+    typeof raw === "string" ? JSON.parse(raw) : raw,
+  );
 }
 
 export async function listSettingGroups() {
@@ -292,10 +422,11 @@ export async function listSettingGroups() {
     rows.map((row: RuntimeValue) => [row.key, row]),
   );
   return Object.keys(schemas).map((key: RuntimeValue) => {
-    const raw = byKey.get(key)?.value ??
+    const raw =
+      byKey.get(key)?.value ??
       (defaultPublicSettings as Record<string, unknown>)[key] ??
       {};
-    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
     return {
       key,
       value,
@@ -307,12 +438,12 @@ export async function listSettingGroups() {
 }
 
 export async function getSettingGroup(key: string) {
-  if (!(key in schemas)) throw AppError.notFound("Settings group not found.");
+  if (!Object.hasOwn(schemas, key))
+    throw AppError.notFound("Settings group not found.");
   const row: RuntimeValue = await StoreSetting.findOne({ where: { key } });
-  const raw = row?.value ??
-    (defaultPublicSettings as Record<string, unknown>)[key] ??
-    {};
-  const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const raw =
+    row?.value ?? (defaultPublicSettings as Record<string, unknown>)[key] ?? {};
+  const value = typeof raw === "string" ? JSON.parse(raw) : raw;
   return {
     key,
     value,
@@ -329,7 +460,10 @@ export async function updateSettingGroup(
   actorId: string,
   request: Request,
 ) {
-  const schema = schemas[key as keyof typeof schemas];
+  // hasOwn: keys such as "constructor" must not resolve to prototype members.
+  const schema = Object.hasOwn(schemas, key)
+    ? schemas[key as keyof typeof schemas]
+    : null;
   if (!schema) throw AppError.notFound("Settings group not found.");
   return sequelize.transaction(async (transaction: RuntimeValue) => {
     let row: RuntimeValue = await StoreSetting.findOne({

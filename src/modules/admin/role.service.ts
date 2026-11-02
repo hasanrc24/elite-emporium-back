@@ -4,7 +4,7 @@ import { sequelize } from "../../db/sequelize.js";
 import { AppError } from "../../lib/errors.js";
 import { newId } from "../../lib/ids.js";
 import { recordAudit } from "../audits/audit.service.js";
-import { actorOwner } from "./staff.service.js";
+import { actorOwner, assertWithinActorPermissions } from "./staff.service.js";
 
 const roleInclude: RuntimeValue = [
   { model: Permission, as: "permissions", through: { attributes: ["allow"] } },
@@ -88,6 +88,11 @@ export async function createRole(
       payload.permissionIds,
       transaction,
     );
+    await assertWithinActorPermissions(
+      actorId,
+      permissions.map((permission: RuntimeValue) => permission.key),
+      transaction,
+    );
     const role: RuntimeValue = await Role.create(
       {
         id: newId(),
@@ -146,6 +151,11 @@ export async function updateRole(
       );
     const permissions: RuntimeValue = await validatePermissions(
       payload.permissionIds,
+      transaction,
+    );
+    await assertWithinActorPermissions(
+      actorId,
+      permissions.map((permission: RuntimeValue) => permission.key),
       transaction,
     );
     const before: RuntimeValue = roleDto(
